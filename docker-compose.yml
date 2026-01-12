@@ -1,0 +1,13 @@
+services:
+  # Run Service
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    ports:
+      - 8000:8000
+    env_file:
+      - .env
+    restart: unless-stopped
+    volumes:
+      - ./apps/api/src:/app/apps/api/src
