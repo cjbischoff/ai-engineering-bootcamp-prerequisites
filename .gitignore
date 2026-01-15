@@ -34,3 +34,14 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+
+# Data files - raw datasets (download from source)
+data/Electronics.jsonl
+data/meta_Electronics.jsonl
+
+# Data files - intermediate processing (can be regenerated from notebook)
+data/meta_Electronics_2022_2023.jsonl
+data/meta_Electronics_2022_2023_with_category.jsonl
+data/meta_Electronics_2022_2023_no_category.jsonl
+data/meta_Electronics_2022_2023_no_date.jsonl
+data/Electronics_2022_2023_with_category_ratings_100.jsonl

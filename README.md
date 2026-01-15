@@ -8,7 +8,7 @@ This repository contains prerequisite materials and a complete AI chatbot applic
 - **Streamlit Frontend**: Interactive chatbot UI with provider selection
 - **Docker Support**: Containerized deployment with Docker Compose
 - **Workspace Architecture**: Modular monorepo structure with `uv` package manager
-- **Jupyter Notebooks**: Interactive tutorials for learning LLM APIs
+- **Jupyter Notebooks**: Interactive tutorials for LLM APIs and dataset exploration
 
 ## Prerequisites
 
@@ -91,14 +91,47 @@ docker compose up --build
 │               └── config.py       # Configuration management
 │
 ├── notebooks/
-│   └── week0/
-│       └── 01-llm-apis.ipynb       # LLM API tutorials
+│   ├── week0/
+│   │   └── 01-llm-apis.ipynb       # LLM API tutorials
+│   └── week1/
+│       └── 01-explore-amazon-dataset.ipynb  # Dataset exploration
 │
 ├── docker-compose.yml              # Multi-service orchestration
 ├── Makefile                        # Common commands
 ├── pyproject.toml                  # Root workspace configuration
 └── .env                            # Environment variables (not tracked)
 ```
+
+## Week 1: Dataset Exploration
+
+### Amazon Electronics Dataset (2022-2023)
+
+Week 1 focuses on exploratory data analysis of the Amazon Electronics reviews dataset.
+
+**Dataset Source:** [Amazon Reviews 2023](https://amazon-reviews-2023.github.io/main.html)
+
+**Notebook:** `notebooks/week1/01-explore-amazon-dataset.ipynb`
+
+**Analysis Pipeline:**
+1. Load and explore raw metadata (1.61M products)
+2. Filter products first observed in 2022 or later
+3. Remove products without valid categories
+4. Analyze distribution across main categories
+5. Filter products with 100+ ratings (17,162 items)
+6. Create reproducible 1,000-item sample
+7. Extract corresponding review records
+
+**Final Datasets:**
+- `meta_Electronics_2022_2023_with_category_ratings_over_100.jsonl` (93MB) - 17,162 products
+- `meta_Electronics_2022_2023_with_category_ratings_over_100_sample_1000.jsonl` (5.4MB) - 1,000 products
+- `Electronics_2022_2023_with_category_ratings_100_sample_1000.jsonl` (55MB) - Reviews for sample
+
+**Downloading Raw Data:**
+To run the complete analysis pipeline, download the raw datasets:
+1. Visit https://amazon-reviews-2023.github.io/main.html
+2. Download `Electronics.jsonl.gz` and `meta_Electronics.jsonl.gz`
+3. Extract to `data/` directory
+4. Run the notebook to regenerate all intermediate files
 
 ## API Endpoints
 
@@ -299,6 +332,38 @@ docker compose up --build --force-recreate
 ```bash
 make run-docker-compose       # Sync dependencies and run Docker Compose
 make clean-notebook-outputs   # Clear Jupyter notebook outputs
+```
+
+## Data Management
+
+### Included Datasets
+The repository includes processed, analysis-ready datasets in the `data/` directory:
+- Final filtered product metadata (17K items with 100+ ratings)
+- Sampled subset for focused analysis (1,000 items)
+- Corresponding review records for sampled products
+
+### Downloading Raw Data
+Raw datasets are not included in the repository due to size (~26GB total). To obtain them:
+
+1. Visit [Amazon Reviews 2023](https://amazon-reviews-2023.github.io/main.html)
+2. Download Electronics category files:
+   - `Electronics.jsonl.gz` (~21GB uncompressed)
+   - `meta_Electronics.jsonl.gz` (~5GB uncompressed)
+3. Extract to the `data/` directory:
+   ```bash
+   gunzip data/Electronics.jsonl.gz
+   gunzip data/meta_Electronics.jsonl.gz
+   ```
+4. Run `notebooks/week1/01-explore-amazon-dataset.ipynb` to regenerate intermediate files
+
+### Dataset Citation
+```bibtex
+@article{hou2024bridging,
+  title={Bridging Language and Items for Retrieval and Recommendation},
+  author={Hou, Yupeng and Li, Jiacheng and He, Zhankui and Yan, An and Chen, Xiusi and McAuley, Julian},
+  journal={arXiv preprint arXiv:2403.03952},
+  year={2024}
+}
 ```
 
 ## Security Notes
