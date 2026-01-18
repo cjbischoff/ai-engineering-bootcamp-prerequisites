@@ -6,9 +6,10 @@ This repository contains prerequisite materials and a complete AI chatbot applic
 
 - **FastAPI Backend**: Multi-provider LLM API service supporting OpenAI, Groq, and Google GenAI
 - **Streamlit Frontend**: Interactive chatbot UI with provider selection
+- **Vector Database**: Qdrant for semantic search and RAG operations
 - **Docker Support**: Containerized deployment with Docker Compose
 - **Workspace Architecture**: Modular monorepo structure with `uv` package manager
-- **Jupyter Notebooks**: Interactive tutorials for LLM APIs and dataset exploration
+- **Jupyter Notebooks**: Interactive tutorials for LLM APIs, dataset exploration, and RAG preprocessing
 
 ## Prerequisites
 
@@ -68,6 +69,8 @@ docker compose up --build
 - **Chatbot UI**: http://localhost:8501
 - **API Documentation**: http://localhost:8000/docs
 - **API Health Check**: http://localhost:8000/health
+- **Qdrant Dashboard**: http://localhost:6333/dashboard
+- **Qdrant API**: http://localhost:6333
 
 ## Project Structure
 
@@ -94,8 +97,10 @@ docker compose up --build
 │   ├── week0/
 │   │   └── 01-llm-apis.ipynb       # LLM API tutorials
 │   └── week1/
-│       └── 01-explore-amazon-dataset.ipynb  # Dataset exploration
+│       ├── 01-explore-amazon-dataset.ipynb  # Dataset exploration
+│       └── 02-RAG-preprocessing-Amazon.ipynb # RAG preprocessing & embeddings
 │
+├── qdrant_storage/                 # Qdrant persistent storage (gitignored)
 ├── docker-compose.yml              # Multi-service orchestration
 ├── Makefile                        # Common commands
 ├── pyproject.toml                  # Root workspace configuration
@@ -104,7 +109,7 @@ docker compose up --build
 
 ## Week 1: Dataset Exploration
 
-### Amazon Electronics Dataset (2022-2023)
+### Sprint 0 / Video 1: Dataset Exploration
 
 Week 1 focuses on exploratory data analysis of the Amazon Electronics reviews dataset.
 
@@ -132,6 +137,237 @@ To run the complete analysis pipeline, download the raw datasets:
 2. Download `Electronics.jsonl.gz` and `meta_Electronics.jsonl.gz`
 3. Extract to `data/` directory
 4. Run the notebook to regenerate all intermediate files
+
+### Sprint 0 / Video 2: RAG Preprocessing & Vector Database
+
+This sprint implements the preprocessing pipeline and vector database infrastructure for Retrieval-Augmented Generation (RAG).
+
+**Notebook:** `notebooks/week1/02-RAG-preprocessing-Amazon.ipynb`
+
+**What Was Done:**
+
+#### 1. Data Preprocessing Pipeline
+The notebook implements a complete ETL (Extract, Transform, Load) pipeline for preparing product data for semantic search:
+
+**Data Loading:**
+- Reads the 1,000-item sample dataset (`meta_Electronics_2022_2023_with_category_ratings_over_100_sample_1000.jsonl`)
+- Uses pandas with `lines=True` parameter for JSONL format
+- Preserves all product metadata including ratings, prices, images, and features
+
+**Text Preprocessing:**
+- **Description Creation**: Combines product `title` and `features` into a single searchable description
+  - Concatenates title with all feature bullet points
+  - Creates rich, keyword-dense text for better semantic matching
+  - Example: "RAVODOI USB C Cable... 【Fast Charging Cord】... 【Universal Compatibility】..."
+
+- **Image Extraction**: Extracts the first large image URL from each product's image array
+  - Uses `.get("large", "")` for safe extraction with fallback
+  - Provides thumbnail-quality images for UI display
+
+**Data Sampling:**
+- Randomly samples 50 items from the 1,000-item dataset using `random_state=42` for reproducibility
+- Selects essential columns: description, image, rating_number, price, average_rating, parent_asin
+- Converts to list of dictionaries using `orient="records"` for easy iteration
+
+#### 2. Vector Embedding Generation
+
+**Embedding Function:**
+```python
+def get_embedding(text, model="text-embedding-3-small"):
+    response = openai.embeddings.create(input=text, model=model)
+    return response.data[0].embedding
+```
+
+**Why OpenAI text-embedding-3-small:**
+- **Efficiency**: 1536-dimensional vectors (smaller than text-embedding-3-large's 3072)
+- **Cost-effective**: Lower API costs for development/testing
+- **Performance**: Excellent balance of speed and semantic quality
+- **Use case**: Perfect for product similarity search and recommendation systems
+
+**Embedding Process:**
+- Each product description is converted to a 1536-dimensional vector
+- Vectors capture semantic meaning, not just keyword matching
+- Similar products cluster together in vector space regardless of exact wording
+- Enables searches like "waterproof phone case" to find "water-resistant mobile cover"
+
+#### 3. Qdrant Vector Database Setup
+
+**Why Qdrant:**
+- **Open Source**: Free, self-hosted vector database
+- **Performance**: Fast similarity search with HNSW (Hierarchical Navigable Small World) algorithm
+- **Scalability**: Handles millions of vectors efficiently
+- **Persistence**: Data survives container restarts via volume mounting
+- **Python-native**: Excellent Python client library with type hints
+
+**Docker Compose Configuration:**
+```yaml
+qdrant:
+  image: qdrant/qdrant
+  ports:
+    - 6333:6333  # HTTP API
+    - 6334:6334  # gRPC API
+  volumes:
+    - ./qdrant_storage:/qdrant/storage:z
+  restart: unless-stopped
+```
+
+**Port Configuration:**
+- **6333**: HTTP REST API for queries and management
+- **6334**: gRPC API for high-performance operations
+
+**Storage:**
+- Persistent volume at `./qdrant_storage/` preserves vectors across restarts
+- `:z` flag enables SELinux compatibility on RHEL/Fedora systems
+
+#### 4. Collection Creation & Configuration
+
+**Collection Setup:**
+```python
+qdrant_client.create_collection(
+    collection_name="Amazon-items-collection-00",
+    vectors_config=VectorParams(size=1536, distance=Distance.COSINE)
+)
+```
+
+**Configuration Choices:**
+
+**Vector Size (1536):**
+- Must match OpenAI's text-embedding-3-small output dimension
+- Fixed at model level - cannot be changed without re-embedding
+
+**Distance Metric (COSINE):**
+- **Why COSINE over Euclidean:** Focuses on direction, not magnitude
+- Normalized vectors mean distance represents semantic similarity
+- Range: 0 (identical) to 2 (opposite meaning)
+- Better for text embeddings where vector length varies
+
+**Alternative Metrics (not used):**
+- `Distance.EUCLIDEAN`: Better for absolute differences (image vectors)
+- `Distance.DOT`: Faster but requires normalized vectors
+
+#### 5. Data Ingestion Pipeline
+
+**Point Structure:**
+```python
+PointStruct(
+    id=i,                              # Unique integer ID
+    vector=get_embedding(description),  # 1536-dim embedding
+    payload=data                        # Original product data
+)
+```
+
+**Payload Strategy:**
+- Stores complete product metadata alongside vectors
+- Enables retrieval of full product details from search results
+- No need for separate database lookups
+- Fields: description, image, rating_number, price, average_rating, parent_asin
+
+**Batch Upsert:**
+```python
+qdrant_client.upsert(
+    collection_name="Amazon-items-collection-00",
+    wait=True,  # Wait for indexing to complete
+    points=pointstructs
+)
+```
+
+**Why Batch Upsert:**
+- More efficient than individual inserts (reduces network overhead)
+- `wait=True` ensures data is indexed before proceeding
+- Returns `UpdateStatus.COMPLETED` for confirmation
+
+#### 6. Semantic Search Implementation
+
+**Retrieval Function:**
+```python
+def retrieve_data(query, k=5):
+    query_embedding = get_embedding(query)
+    results = qdrant_client.query_points(
+        collection_name="Amazon-items-collection-00",
+        query=query_embedding,
+        limit=k
+    )
+    return results
+```
+
+**How It Works:**
+1. User query (e.g., "gaming headset with mic") → embedding vector
+2. Qdrant finds k-nearest neighbors using HNSW index
+3. Returns most semantically similar products with scores
+4. Scores represent cosine similarity (higher = more relevant)
+
+**Why This Approach:**
+- **Semantic Understanding**: "laptop charger" matches "notebook power adapter"
+- **Typo Resilient**: Embeddings are robust to spelling errors
+- **Multi-language Potential**: Embeddings can handle multiple languages
+- **Context Aware**: Understands "wireless" vs "wired" distinctions
+
+**Performance Characteristics:**
+- HNSW index: O(log n) search complexity
+- 50 items: Near-instant (<10ms) retrieval
+- Scalable to millions of items with minimal degradation
+
+#### 7. Infrastructure Architecture
+
+**Complete Stack:**
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│   FastAPI   │────▶│   OpenAI     │     │   Qdrant    │
+│   Backend   │     │  Embeddings  │────▶│   Vector    │
+│   (Port     │     │     API      │     │   Database  │
+│    8000)    │     └──────────────┘     │  (Port 6333)│
+└─────────────┘                          └─────────────┘
+      ▲                                         ▲
+      │                                         │
+      │                                         │
+┌─────────────┐                          ┌─────────────┐
+│  Streamlit  │                          │  Persistent │
+│     UI      │                          │   Storage   │
+│  (Port 8501)│                          │  (./qdrant_ │
+└─────────────┘                          │   storage/) │
+                                         └─────────────┘
+```
+
+**Why This Architecture:**
+- **Separation of Concerns**: Each service has a single responsibility
+- **Scalability**: Services can be scaled independently
+- **Reliability**: Container restart doesn't lose vector data
+- **Development**: Can develop/test services in isolation
+
+#### 8. Testing & Validation
+
+**Test Point Structure:**
+```python
+PointStruct(
+    id=0,
+    vector=get_embedding("Test text"),
+    payload={"text": "Test text", "model": "text-embedding-3-small"}
+)
+```
+
+**Validation Steps:**
+1. Test single embedding generation
+2. Verify point structure creation
+3. Validate batch embedding pipeline
+4. Confirm successful upsert operation
+5. Test retrieval with sample queries
+
+**Outputs:**
+- All 50 products successfully embedded and stored
+- Collection ready for semantic search queries
+- Data persisted to `./qdrant_storage/` directory
+
+**Why This Matters for RAG:**
+- **Retrieval**: Semantic search finds relevant products for user queries
+- **Augmentation**: Retrieved product data augments LLM context
+- **Generation**: LLM generates responses using product information
+- **Foundation**: This preprocessing enables the complete RAG pipeline
+
+**Next Steps:**
+- Integrate semantic search with FastAPI endpoints
+- Connect retrieval results to LLM context
+- Build product recommendation features
+- Implement filtering (price, ratings, categories)
 
 ## API Endpoints
 
@@ -318,6 +554,8 @@ docker compose up --build --force-recreate
 - `pydantic>=2.12.5` - Data validation
 - `jupyter>=1.1.1` - Jupyter notebook support
 - `python-dotenv>=1.2.1` - Environment variable management
+- `qdrant-client>=1.12.1` - Qdrant vector database client
+- `pandas>=2.2.0` - Data manipulation and analysis
 
 ### API Service
 - `fastapi>=0.128.0` - FastAPI framework
