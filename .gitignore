@@ -45,3 +45,6 @@ data/meta_Electronics_2022_2023_with_category.jsonl
 data/meta_Electronics_2022_2023_no_category.jsonl
 data/meta_Electronics_2022_2023_no_date.jsonl
 data/Electronics_2022_2023_with_category_ratings_100.jsonl
+
+# Qdrant vector database storage (runtime data)
+qdrant_storage/
