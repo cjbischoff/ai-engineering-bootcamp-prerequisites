@@ -751,6 +751,320 @@ This RAG implementation provides the foundation for advanced features:
 - **Conversational**: Multi-turn dialogue with context retention
 - **Analytics**: Track popular queries and products for insights
 
+### Sprint 0 / Video 4: Production RAG API Implementation
+
+This sprint implements the production-ready FastAPI backend for the RAG pipeline, integrating all components from the notebooks into a deployable web service.
+
+**Files:**
+- `apps/api/src/api/app.py` - FastAPI application setup and middleware
+- `apps/api/src/api/api/endpoints.py` - API route handlers
+- `apps/api/src/api/api/models.py` - Request/response schemas
+- `apps/api/src/api/api/middleware.py` - Custom middleware (request tracing)
+- `apps/api/src/api/agents/retrieval_generation.py` - RAG pipeline implementation
+
+#### 1. Architecture Overview
+
+The production API implements a layered architecture with clear separation of concerns:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    FastAPI Application Stack                      │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│  Client Request (POST /rag/)                                      │
+│         ↓                                                          │
+│  ┌─────────────────────────────────────────────────┐             │
+│  │ Middleware Layer                                │             │
+│  │  1. RequestIDMiddleware (UUID generation)       │             │
+│  │  2. CORSMiddleware (cross-origin support)       │             │
+│  └─────────────────────────────────────────────────┘             │
+│         ↓                                                          │
+│  ┌─────────────────────────────────────────────────┐             │
+│  │ Validation Layer (Pydantic)                     │             │
+│  │  - RAGRequest: Validates query field            │             │
+│  │  - Auto-rejects malformed requests (422)        │             │
+│  └─────────────────────────────────────────────────┘             │
+│         ↓                                                          │
+│  ┌─────────────────────────────────────────────────┐             │
+│  │ Routing Layer (APIRouter)                       │             │
+│  │  - POST /rag/ → rag() endpoint handler          │             │
+│  │  - Extracts query from validated request        │             │
+│  └─────────────────────────────────────────────────┘             │
+│         ↓                                                          │
+│  ┌─────────────────────────────────────────────────┐             │
+│  │ RAG Pipeline Layer                              │             │
+│  │  1. get_embedding(query) → vector               │             │
+│  │  2. retrieve_data() → semantic search           │             │
+│  │  3. process_context() → format results          │             │
+│  │  4. build_prompt() → construct LLM prompt       │             │
+│  │  5. generate_answer() → LLM response            │             │
+│  └─────────────────────────────────────────────────┘             │
+│         ↓                                                          │
+│  ┌─────────────────────────────────────────────────┐             │
+│  │ Response Layer                                  │             │
+│  │  - RAGResponse: Serializes answer + request_id  │             │
+│  │  - Middleware adds X-Request-ID header          │             │
+│  └─────────────────────────────────────────────────┘             │
+│         ↓                                                          │
+│  Client Response (JSON)                                           │
+│                                                                    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+#### 2. Key Components
+
+**a) Application Setup ([app.py](apps/api/src/api/app.py))**
+
+The FastAPI application is configured with:
+- **Auto-generated Documentation**: OpenAPI schema at `/docs` (Swagger UI) and `/redoc` (ReDoc)
+- **Middleware Stack** (order matters - first added = first executed):
+  1. `RequestIDMiddleware`: Generates UUID for every request for distributed tracing
+  2. `CORSMiddleware`: Enables cross-origin requests from Streamlit frontend (port 8501)
+- **Router Registration**: Mounts `api_router` with all RAG endpoints
+
+**Why CORS:**
+- Browser security blocks requests between different origins (different ports = different origins)
+- Without CORS, Streamlit (port 8501) cannot call API (port 8000)
+- Production should restrict `allow_origins` to specific domains, not `["*"]`
+
+**b) Request Tracing Middleware ([middleware.py](apps/api/src/api/api/middleware.py))**
+
+Implements distributed tracing via UUID generation:
+- **Pattern**: `BaseHTTPMiddleware` with async `dispatch()` method
+- **UUID Generation**: Uses `uuid.uuid4()` for globally unique request IDs
+- **Storage**: Attaches ID to `request.state.request_id` (accessible in endpoints)
+- **Response Header**: Adds `X-Request-ID` header for client-side tracking
+- **Logging**: Records request start/completion with method, path, and request ID
+
+**Benefits:**
+- **Debugging**: Filter logs by request ID to trace issues
+- **Client Support**: Users can reference request ID in bug reports
+- **Distributed Tracing**: Track requests across multiple microservices
+- **Performance Monitoring**: Measure end-to-end latency per request
+
+**c) Request/Response Models ([models.py](apps/api/src/api/api/models.py))**
+
+Uses Pydantic for automatic validation and serialization:
+
+```python
+class RAGRequest(BaseModel):
+    query: str = Field(..., description="The query to be used in the RAG pipeline")
+
+class RAGResponse(BaseModel):
+    request_id: str = Field(..., description="The request ID")
+    answer: str = Field(..., description="The answer to the query")
+```
+
+**Why Pydantic:**
+- **Automatic Validation**: FastAPI validates JSON against schema before calling endpoint
+- **Type Safety**: Catches type errors at runtime, not in production
+- **OpenAPI Generation**: Field descriptions appear in auto-generated API documentation
+- **Error Messages**: Returns 422 Unprocessable Entity with detailed validation errors
+
+**d) API Endpoints ([endpoints.py](apps/api/src/api/api/endpoints.py))**
+
+The main RAG endpoint:
+
+```python
+@rag_router.post("/")
+def rag(request: Request, payload: RAGRequest) -> RAGResponse:
+    answer = rag_pipeline(payload.query)
+    return RAGResponse(request_id=request.state.request_id, answer=answer)
+```
+
+**Design Decisions:**
+- **APIRouter Pattern**: Groups related endpoints for modularity (easy to add `/rag/health`, `/rag/feedback`)
+- **Request Object**: Access middleware-injected `request_id` from `request.state`
+- **Return Type**: Pydantic `RAGResponse` automatically serialized to JSON
+- **Error Handling**: Not implemented (production would need try/except blocks)
+
+**e) RAG Pipeline ([retrieval_generation.py](apps/api/src/api/agents/retrieval_generation.py))**
+
+Production implementation of the 5-step RAG workflow from the notebook:
+
+**1. Embedding Generation:**
+- Function: `get_embedding(text, model="text-embedding-3-small")`
+- Model: OpenAI text-embedding-3-small (1536 dimensions)
+- Critical: Must match preprocessing model for semantic space consistency
+
+**2. Vector Retrieval:**
+- Function: `retrieve_data(query, qdrant_client, k=5)`
+- Connection: `http://qdrant:6333` (Docker Compose service name, not localhost)
+- Search: Cosine similarity via `query_points()` with HNSW index
+- Returns: Product IDs, descriptions, ratings, similarity scores
+
+**3. Context Formatting:**
+- Function: `process_context(context)`
+- Format: `- ID: {asin}, rating: {rating}, description: {description}\n`
+- Uses: `zip(list1, list2, list3)` - NO tuple() wrapper (TypeError fix)
+
+**4. Prompt Construction:**
+- Function: `build_prompt(preprocessed_context, question)`
+- Role: "Shopping assistant"
+- Constraint: "Only use provided context" (prevents hallucination)
+- Structure: System instructions → Context → Question
+
+**5. Answer Generation:**
+- Function: `generate_answer(prompt)`
+- Model: OpenAI `gpt-5-nano` with `reasoning_effort="minimal"`
+- Why nano: Cost-effective for straightforward retrieval-based Q&A
+- Message: Single system message with full prompt
+
+**6. Pipeline Orchestration:**
+- Function: `rag_pipeline(question, top_k=5)`
+- Entry point: Single function call executes entire workflow
+- Connection: Creates new Qdrant client per request (inefficient, needs pooling)
+
+#### 3. Docker Integration
+
+**Service Communication:**
+- API container connects to Qdrant using service name: `http://qdrant:6333`
+- Docker Compose creates internal DNS for service-to-service communication
+- Localhost would refer to container itself, not Qdrant container
+
+**Volume Mounts for Hot Reload:**
+- `./apps/api/src:/app/apps/api/src` - Code changes reflect immediately without rebuild
+- `./qdrant_storage:/qdrant/storage:z` - Vector database persists between restarts
+
+#### 4. Lessons Learned
+
+**TypeError with zip() and tuple():**
+- **Problem**: `zip(tuple(list1, list2, list3))` is invalid syntax
+- **Root Cause**: `tuple()` constructor accepts one iterable, not multiple arguments
+- **Fix**: Use `zip(list1, list2, list3)` directly - no tuple wrapper
+- **Detection**: Runtime error: `TypeError: tuple expected at most 1 argument, got 3`
+- **When**: Multi-line formatting can hide this error until code execution
+
+**Qdrant Connection in Docker:**
+- Use service name `http://qdrant:6333`, not `http://localhost:6333`
+- Localhost in container context refers to the container itself
+- Docker Compose DNS resolves service names to container IPs
+
+**Middleware Order:**
+- Middleware added first runs first (outermost layer of onion)
+- RequestIDMiddleware before CORS ensures UUID exists before CORS validation
+- Response flows back through middleware in reverse order
+
+**Pydantic Validation:**
+- FastAPI automatically returns 422 (not 500) for invalid requests
+- Field descriptions improve auto-generated documentation quality
+- Type hints catch bugs early during development
+
+**RAG vs Pure LLM:**
+- Pure LLM may hallucinate product details or have outdated knowledge
+- RAG grounds answers in actual product data from vector database
+- Trade-off: Requires vector database setup but provides verifiable, current answers
+
+**Embedding Model Consistency:**
+- Critical: Use same model for preprocessing AND query-time embedding
+- Different models = different vector spaces = poor retrieval quality
+- Dimension mismatch causes Qdrant errors
+
+**Request Tracing Value:**
+- UUID in both response body and header enables multiple use cases
+- Clients can display: "Error? Reference request ID: abc-123"
+- Logs filterable: `grep "request_id: abc-123" logs/`
+- Essential for debugging distributed systems
+
+#### 5. Production Considerations
+
+**Not Implemented (Intentional MVP Scope):**
+- **Error Handling**: No try/except blocks around API calls or pipeline
+- **Rate Limiting**: API unprotected, vulnerable to abuse
+- **Timeout Handling**: Long-running queries could hang indefinitely
+- **Input Validation**: No query length limits or content sanitization
+- **Connection Pooling**: New Qdrant client created per request (inefficient)
+- **Caching**: Common queries could be cached to reduce API costs
+- **Monitoring**: No metrics on retrieval quality, answer accuracy, latency
+- **Authentication**: No API keys or access control
+- **Response Streaming**: Answers returned all-at-once, not token-by-token
+
+**When to Add:**
+- Error handling: Before ANY production deployment
+- Rate limiting: When opening to public users
+- Monitoring: When analyzing system performance and quality
+- Authentication: When controlling access or implementing billing
+- Caching: When reducing OpenAI API costs becomes priority
+
+#### 6. Testing the API
+
+**Using curl:**
+```bash
+curl -X POST http://localhost:8000/rag/ \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are the best wireless headphones?"}'
+```
+
+**Using Python requests:**
+```python
+import requests
+
+response = requests.post(
+    "http://localhost:8000/rag/",
+    json={"query": "What are the best wireless headphones?"}
+)
+print(response.json())
+```
+
+**Expected Response:**
+```json
+{
+  "request_id": "bf802801-da21-4b61-a10c-e700d4aafe2e",
+  "answer": "Based on the available products, I recommend the Sony WH-1000XM4 wireless headphones (ID: B08XYZMQ2Y) with a rating of 4.6. These headphones feature industry-leading noise cancellation, exceptional sound quality, and up to 30 hours of battery life."
+}
+```
+
+**Validation:**
+- Request ID appears in both response body and `X-Request-ID` header
+- Answer references actual product IDs from Qdrant collection
+- Product details match retrieved context (rating, features)
+
+#### 7. API Documentation
+
+FastAPI auto-generates interactive API documentation:
+
+**Swagger UI (`/docs`):**
+- Interactive API explorer with "Try it out" functionality
+- Auto-generated from Pydantic models and route definitions
+- Shows request/response schemas, field descriptions, validation rules
+
+**ReDoc (`/redoc`):**
+- Alternative documentation UI with cleaner layout
+- Better for reading and sharing with stakeholders
+- Same content as Swagger UI, different presentation
+
+**OpenAPI Schema (`/openapi.json`):**
+- Machine-readable API specification
+- Can be imported into Postman, Insomnia, or other API clients
+- Useful for generating client SDKs in other languages
+
+#### 8. Next Steps
+
+**Immediate Improvements:**
+- Add comprehensive error handling to pipeline
+- Implement request timeout and retry logic
+- Add logging for debugging and monitoring
+- Create health check endpoint for orchestration
+
+**Feature Additions:**
+- Product filtering by price range, category, rating
+- Conversation history for follow-up questions
+- Multi-turn dialogue with context retention
+- Product image URLs in responses
+
+**Optimization:**
+- Connection pooling for Qdrant client
+- Caching layer for common queries
+- Async OpenAI client for better throughput
+- Response streaming for real-time UI updates
+
+**Production Readiness:**
+- API key authentication
+- Rate limiting per user/IP
+- Request/response validation
+- Comprehensive test suite
+- CI/CD pipeline integration
+
 ## API Endpoints
 
 ### FastAPI Backend (`http://localhost:8000`)
