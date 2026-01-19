@@ -377,7 +377,7 @@ docker compose up --build
 - **Raw datasets** not included in repo - download from [Amazon Reviews 2023](https://amazon-reviews-2023.github.io/main.html)
 - **Qdrant storage** persists between Docker restarts - delete `qdrant_storage/` to reset
 - **uv workspace** - dependency changes require `uv sync` at root level
-- **Git branch strategy** - current branch is `week1/exercises`, main branch is `setup/dev-environment`
+- **Git branch strategy** - `main` is the primary branch for all development
 
 ---
 
