@@ -92,11 +92,16 @@ def rag(request: Request, payload: RAGRequest) -> RAGResponse:
     """
     # Run the complete RAG pipeline: retrieve context and generate answer
     # This calls the 5-step process: embed -> retrieve -> format -> prompt -> generate
+    # Changed in Video 5: rag_pipeline now returns a dict with answer + metadata
     answer = rag_pipeline(payload.query)
 
     # Return structured response with request ID for tracing
     # request.state.request_id was set by RequestIDMiddleware
-    return RAGResponse(request_id=request.state.request_id, answer=answer)
+    # Changed in Video 5: Extract answer["answer"] instead of using answer directly
+    # Why: rag_pipeline now returns {"answer": str, "question": str, "retrieved_context_ids": list, ...}
+    #      but the API response only needs the answer field (metadata is for internal observability)
+    # Future enhancement: Could expose retrieved_context_ids to frontend for "Products used" feature
+    return RAGResponse(request_id=request.state.request_id, answer=answer["answer"])
 
 
 # Create main API router and mount the RAG router
