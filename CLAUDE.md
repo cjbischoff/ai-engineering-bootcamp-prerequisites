@@ -239,7 +239,6 @@ Not implemented (intentional MVP scope):
 - Input validation: No query length limits or content sanitization
 - Connection pooling: New Qdrant client created per request (inefficient)
 - Caching: Common queries could be cached to reduce API calls
-- Monitoring: No metrics on retrieval quality, answer relevance, latency
 - Authentication: No API keys, public access
 - Query logging: No analytics on what users are asking
 - Response streaming: Answers returned all-at-once, not streamed
@@ -247,9 +246,272 @@ Not implemented (intentional MVP scope):
 When to add these:
 - Error handling: Before any production deployment
 - Rate limiting: When opening to public users
-- Monitoring: When analyzing system performance
 - Authentication: When controlling access or charging for usage
 - Caching: When reducing OpenAI API costs becomes priority
+
+**6. LangSmith Observability (Video 5)**
+
+This section covers the observability instrumentation added to the RAG pipeline for debugging, monitoring, and cost tracking.
+
+**Overview:**
+- **Tool**: LangSmith - Purpose-built observability platform for LLM applications
+- **Integration**: Python SDK (`langsmith` package) with decorator-based instrumentation
+- **Environment**: Requires 4 environment variables for LangSmith API authentication
+- **Visualization**: Traces viewable at https://smith.langchain.com
+
+**Why LangSmith vs Generic APM:**
+- **LLM-Specific**: Captures prompts, completions, and token usage (not just timing)
+- **Visual Trace Trees**: Shows RAG pipeline hierarchy (retrieval → formatting → generation)
+- **Token Cost Tracking**: Aggregates OpenAI API usage across all calls in a request
+- **Debugging**: Inspect exact prompts/responses, similarity scores, and retrieved context
+- **Comparison**: Side-by-side trace comparison to debug: "Why did query A fail but query B succeed?"
+
+**Architecture Changes:**
+
+**a) Dependencies Added:**
+```toml
+# apps/api/pyproject.toml
+dependencies = [
+    "langsmith>=0.6.4",  # LangSmith Python SDK
+    # ... other dependencies
+]
+
+# pyproject.toml (root workspace)
+[dependency-groups]
+dev = [
+    "langsmith>=0.6.4",  # Available in all apps
+    # ... other dev dependencies
+]
+```
+
+**b) Environment Variables:**
+```env
+# env.example
+export LANGSMITH_TRACING=true                       # Enable/disable tracing
+export LANGSMITH_ENDPOINT=https://api.smith.langchain.com  # LangSmith API endpoint
+export LANGSMITH_API_KEY=<your-api-key>            # Authentication
+export LANGSMITH_PROJECT="rag-tracing"             # Project name for organizing traces
+```
+
+**c) Code Instrumentation:**
+
+Import statements added to `agents/retrieval_generation.py`:
+```python
+from langsmith import get_current_run_tree, traceable
+```
+
+**Decorator Pattern:**
+Every function in the RAG pipeline decorated with `@traceable`:
+1. `@traceable(name="Get Embedding", run_type="embedding", metadata={...})` on `get_embedding()`
+2. `@traceable(name="Retrieve Data", run_type="retriever")` on `retrieve_data()`
+3. `@traceable(name="Format Retrieved Context", run_type="prompt")` on `process_context()`
+4. `@traceable(name="Build Prompt", run_type="prompt")` on `build_prompt()`
+5. `@traceable(name="Generate Answer", run_type="llm", metadata={...})` on `generate_answer()`
+6. `@traceable(name="RAG Pipeline")` on `rag_pipeline()` (root span)
+
+**What @traceable Captures Automatically:**
+- Function inputs (arguments)
+- Function outputs (return values)
+- Execution time (start/end timestamps)
+- Errors and stack traces
+- Parent-child span relationships
+
+**Manual Token Tracking:**
+
+LangSmith doesn't auto-capture OpenAI API token usage, so we manually instrument:
+
+```python
+# In get_embedding() and generate_answer()
+response = openai.embeddings.create(...)  # or openai.chat.completions.create(...)
+
+current_run = get_current_run_tree()  # Get active LangSmith trace context
+
+if current_run:
+    # Manually attach token usage from OpenAI response
+    current_run.metadata["usage_metadata"] = {
+        "input_tokens": response.usage.prompt_tokens,
+        "output_tokens": response.usage.completion_tokens,  # Only for chat completions
+        "total_tokens": response.usage.total_tokens,
+    }
+```
+
+**Why manual tracking:**
+- OpenAI SDK doesn't integrate with LangSmith automatically
+- Token counts needed for cost analysis: `tokens × price_per_1k_tokens`
+- LangSmith aggregates tokens across all operations in a trace
+
+**Trace Hierarchy:**
+
+LangSmith visualizes the RAG pipeline as a tree:
+```
+RAG Pipeline (root span)
+├── Retrieve Data
+│   └── Get Embedding (child - query embedding)
+├── Format Retrieved Context
+├── Build Prompt
+└── Generate Answer
+```
+
+**Observability Benefits:**
+
+1. **Performance Analysis:**
+   - See which step is slowest: embedding (50ms), retrieval (100ms), or generation (2s)
+   - Identify bottlenecks: Is Qdrant slow or is OpenAI API slow?
+   - Compare execution times across different queries
+
+2. **Token Cost Tracking:**
+   - Input tokens: Prompt length (instructions + context + question)
+   - Output tokens: Generated answer length
+   - Total tokens: Aggregated across embedding + generation calls
+   - Cost calculation: `total_tokens × $0.00002` per 1K tokens (text-embedding-3-small) + `total_tokens × gpt-5-nano pricing`
+
+3. **Debugging:**
+   - Inspect exact prompts sent to LLM: "Is the prompt structure causing poor answers?"
+   - View retrieved products and similarity scores: "Why did this query return irrelevant products?"
+   - Trace failures: "Which step threw an error?"
+   - Compare traces: "Why did query A return good results but query B returned bad results?"
+
+4. **Retrieval Quality Analysis:**
+   - Similarity scores visible in `Retrieve Data` span output
+   - Low scores (<0.7) indicate poor semantic matches
+   - Can identify when to expand the knowledge base or adjust retrieval parameters
+
+5. **Prompt Engineering:**
+   - See exact formatted context passed to LLM
+   - Iterate on prompt structure by comparing traces with different instructions
+   - A/B test different system prompts
+
+**Return Value Changes:**
+
+To support observability and future features, `rag_pipeline()` return value changed:
+
+**Before Video 5:**
+```python
+return answer  # Just a string
+```
+
+**After Video 5:**
+```python
+return {
+    "answer": answer,                      # Natural language response
+    "question": question,                  # Original query (for validation)
+    "retrieved_context_ids": [...],        # Product ASINs
+    "retrieved_context": [...],            # Product descriptions
+    "similarity_scores": [...]             # Cosine similarity scores
+}
+```
+
+**Why this change:**
+- **Internal observability**: Metadata available for logging and analysis
+- **Debugging**: Can inspect which products influenced the answer
+- **Future features**: Frontend could display "Products used in this answer"
+- **Analytics**: Track which products are most frequently retrieved
+
+**Endpoint Compatibility:**
+
+The API endpoint extracts only the `answer` field:
+```python
+# api/endpoints.py
+result = rag_pipeline(payload.query)
+return RAGResponse(request_id=request.state.request_id, answer=result["answer"])
+```
+
+This keeps the API response unchanged (backward compatible) while enriching internal data.
+
+**Lessons Learned:**
+
+1. **LangSmith Trace Activation**
+   - Tracing automatically enabled when environment variables are set
+   - No explicit initialization code needed (SDK auto-configures)
+   - Can toggle tracing on/off via `LANGSMITH_TRACING=true|false`
+   - Traces appear in LangSmith UI within seconds (near real-time)
+
+2. **Decorator Order and Nesting**
+   - `@traceable` works with any function (sync or async)
+   - Nested function calls automatically create parent-child span relationships
+   - Example: `rag_pipeline()` calls `retrieve_data()` → nested spans in trace tree
+   - No manual span management needed (decorator handles everything)
+
+3. **Token Usage Manual Tracking Required**
+   - LangSmith can't auto-capture OpenAI SDK usage stats
+   - Must manually call `get_current_run_tree()` and attach metadata
+   - Pattern: Call OpenAI API → Get response → Extract usage → Attach to current_run
+   - Only needed for functions that call LLM/embedding APIs
+
+4. **Metadata vs Output**
+   - **Output**: Function return value (captured automatically)
+   - **Metadata**: Custom key-value pairs (requires manual attachment)
+   - Use metadata for token counts, model names, custom metrics
+   - Output shows in "Output" tab, metadata shows in "Metadata" tab in LangSmith UI
+
+5. **Run Types Matter**
+   - `run_type="llm"`: LangSmith treats as LLM call (special UI rendering)
+   - `run_type="embedding"`: Categorized as embedding operation
+   - `run_type="retriever"`: Categorized as retrieval operation
+   - `run_type="prompt"`: Categorized as prompt engineering
+   - Enables filtering: "Show me only LLM calls" or "Show me only retrievals"
+
+6. **Project Organization**
+   - `LANGSMITH_PROJECT` groups related traces together
+   - Use different projects for dev/staging/prod: "rag-tracing-dev", "rag-tracing-prod"
+   - Can archive or delete entire projects to clean up old traces
+   - Helpful for organizing: "rag-tracing", "chatbot-tracing", "evaluation-runs"
+
+7. **Cost vs Value of Observability**
+   - LangSmith has a free tier: 5,000 traces/month
+   - Paid plans: $39/month for 50K traces, $199/month for 500K traces
+   - Trade-off: Observability cost vs debugging time saved
+   - Essential for production: Can't debug LLM issues without traces
+   - Development: Can toggle off (`LANGSMITH_TRACING=false`) to save quota
+
+8. **Trace Retention**
+   - Free tier: 14-day retention
+   - Paid plans: Configurable retention (30 days to forever)
+   - Can export traces as JSON for long-term storage
+   - Important: Don't rely on LangSmith as system-of-record for logs
+
+**Project Optimizations:**
+
+1. **Connection Pooling for Qdrant**
+   - Current: New `QdrantClient` created per request in `rag_pipeline()`
+   - Optimization: Create client once at module level, reuse across requests
+   - Benefit: Reduce connection overhead, faster queries
+   - Implementation: `qdrant_client = QdrantClient(url="http://qdrant:6333")` at module level
+
+2. **Caching for Common Queries**
+   - Pattern: Many users ask similar questions ("best headphones", "cheap laptops")
+   - Optimization: Cache embeddings and/or full answers for common queries
+   - Benefit: Reduce OpenAI API calls, faster responses, lower costs
+   - Implementation: Redis or in-memory LRU cache with TTL (time-to-live)
+   - Trade-off: Stale data if products change frequently
+
+3. **Batch Embedding for Multi-Query**
+   - Current: One embedding call per user query
+   - Optimization: If system supports batch queries, embed multiple at once
+   - Benefit: OpenAI API supports batch embeddings (more efficient)
+   - Implementation: `openai.embeddings.create(input=["query1", "query2", ...])`
+
+4. **Monitoring Metrics**
+   - LangSmith provides traces, but not real-time metrics dashboards
+   - Optimization: Add Prometheus/Grafana for operational metrics:
+     * Requests per second
+     * P50/P95/P99 latency
+     * Error rate
+     * Token usage per hour/day
+   - Benefit: Alerting on anomalies, capacity planning
+   - Implementation: FastAPI middleware to emit metrics
+
+5. **Retrieval Quality Scoring**
+   - Current: Similarity scores logged but not analyzed
+   - Optimization: Add alerting when avg similarity < threshold (e.g., 0.6)
+   - Benefit: Detect when users ask questions outside knowledge base
+   - Implementation: Calculate avg similarity in `retrieve_data()`, log warning if low
+
+6. **A/B Testing Prompts**
+   - LangSmith supports prompt versioning and comparison
+   - Optimization: Test different system prompts to improve answer quality
+   - Benefit: Data-driven prompt engineering (not just intuition)
+   - Implementation: LangSmith Playground or custom A/B test framework
 
 ### Critical Implementation Details
 
