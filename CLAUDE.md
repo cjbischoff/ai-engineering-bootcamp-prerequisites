@@ -513,6 +513,203 @@ This keeps the API response unchanged (backward compatible) while enriching inte
    - Benefit: Data-driven prompt engineering (not just intuition)
    - Implementation: LangSmith Playground or custom A/B test framework
 
+**7. Evaluation Dataset Creation (Video 6)**
+
+This section covers creating synthetic evaluation datasets for testing the RAG pipeline's performance.
+
+**Overview:**
+- **Tool**: LangSmith Datasets - Structured test cases for evaluating LLM applications
+- **Notebook**: `notebooks/week1/04-evaluation-dataset.ipynb`
+- **Purpose**: Generate synthetic question-answer pairs with reference contexts for systematic RAG evaluation
+- **Data Source**: Existing product data from Qdrant vector database
+
+**Why Evaluation Datasets:**
+- **Systematic Testing**: Test RAG pipeline against consistent, repeatable questions
+- **Quality Metrics**: Measure answer quality, retrieval accuracy, and consistency over time
+- **Regression Prevention**: Detect when code changes degrade performance
+- **A/B Testing**: Compare different prompts, models, or retrieval strategies
+- **Continuous Improvement**: Identify weak points in the system (bad retrievals, poor answers)
+
+**Architecture:**
+
+**a) Synthetic Data Generation:**
+- Uses LLM (GPT-4o) to generate realistic questions based on actual product data
+- Structured output via JSON schema to ensure consistent format
+- Each generated example includes:
+  - `question`: Natural language user query
+  - `chunk_ids`: Product IDs that should be retrieved
+  - `answer_example`: Expected answer demonstrating quality
+
+**b) LangSmith Dataset Structure:**
+```python
+# Each example in the dataset has:
+{
+  "inputs": {"question": "What are the best wireless headphones?"},
+  "outputs": {
+    "ground_truth": "Based on the products...",  # Expected answer
+    "reference_context_ids": ["B09X12ABC", ...],  # Products that should be retrieved
+    "reference_descriptions": ["Product 1...", ...]  # Full product descriptions
+  }
+}
+```
+
+**c) Notebook Workflow:**
+
+1. **Environment Setup** (Cells 1-2):
+   - Load environment variables with `python-dotenv` (OPENAI_KEY, LANGSMITH_API_KEY)
+   - Initialize Qdrant client: `QdrantClient(url="http://localhost:6333")`
+   - Initialize LangSmith client: `Client(api_key=os.environ["LANGSMITH_API_KEY"])`
+
+2. **Data Exploration** (Cells 3-7):
+   - Fetch sample products from Qdrant collection
+   - Understand product structure (parent_asin, title, features, description)
+   - Select representative products for question generation
+
+3. **Synthetic Question Generation** (Cells 8-11):
+   - Define JSON schema for structured output
+   - Schema specifies: question (string), chunk_ids (array), answer_example (string)
+   - Use OpenAI `gpt-4o` with `response_format={"type": "json_schema", "json_schema": output_schema}`
+   - Prompt engineering: "Generate evaluation questions that test different aspects of RAG"
+   - Parse JSON response into `json_output` list
+
+4. **Helper Function** (Cell 16):
+   ```python
+   def get_description(parent_asin: str) -> str:
+       """Fetch full product description from Qdrant by product ID"""
+       points = qdrant_client.scroll(
+           collection_name="Amazon-items-collection-00",
+           scroll_filter=Filter(
+               must=[FieldCondition(key="parent_asin", match=MatchValue(value=parent_asin))]
+           ),
+           limit=100,
+           with_payload=True,
+           with_vectors=False
+       )[0]
+       return points[0].payload["description"]
+   ```
+
+5. **Dataset Creation** (Cell 20):
+   ```python
+   dataset_name = "rag-evaluation-dataset"
+
+   # Try to create dataset, if it already exists, read the existing one
+   try:
+       dataset = client.create_dataset(
+           dataset_name=dataset_name,
+           description="Dataset for evaluating RAG pipeline"
+       )
+       print(f"Created new dataset: {dataset_name}")
+   except Exception as e:
+       if "already exists" in str(e):
+           dataset = client.read_dataset(dataset_name=dataset_name)
+           print(f"Using existing dataset: {dataset_name}")
+       else:
+           raise e
+   ```
+   - Handles 409 Conflict error when dataset already exists (allows re-running notebook)
+   - Reads existing dataset instead of failing
+
+6. **Dataset Population** (Cell 21):
+   ```python
+   for item in json_output:
+       print(item["chunk_ids"])  # Track progress
+       client.create_example(
+           dataset_id=dataset.id,
+           inputs={"question": item["question"]},
+           outputs={
+               "ground_truth": item["answer_example"],
+               "reference_context_ids": item["chunk_ids"],
+               "reference_descriptions": [get_description(id) for id in item["chunk_ids"]]
+           }
+       )
+   ```
+   - Iterates through synthetic questions
+   - Creates LangSmith example for each question
+   - Fetches full product descriptions for reference context
+
+**Key Implementation Patterns:**
+
+1. **Environment Variable Loading:**
+   - Jupyter notebooks don't auto-load `.env` files
+   - Must explicitly call `load_dotenv()` from `python-dotenv`
+   - Critical for LANGSMITH_API_KEY and OPENAI_KEY
+
+2. **Structured LLM Output:**
+   - JSON schema defines exact output structure
+   - OpenAI's `response_format` enforces schema compliance
+   - Eliminates need for manual parsing/validation
+   - Pattern: `{"type": "json_schema", "json_schema": {"name": "...", "schema": {...}}}`
+
+3. **Error Handling for Idempotency:**
+   - Wrap dataset creation in try/except
+   - Detect "already exists" error and read existing dataset
+   - Allows notebook to be re-run without manual cleanup
+   - Pattern: Try create → Catch conflict → Read existing
+
+4. **Product Description Retrieval:**
+   - Use Qdrant `scroll()` with filter for targeted lookup
+   - Filter by `parent_asin` (product ID) for exact match
+   - Set `with_vectors=False` to reduce payload size (only need metadata)
+   - More efficient than full collection scan
+
+**Lessons Learned:**
+
+1. **Jupyter Notebook JSON Escaping:**
+   - Problem: Double-escaped newlines (`\\n\\n`) appeared as literal `\n` in code
+   - Cause: Incorrect JSON formatting when manually editing notebook
+   - Fix: Jupyter cell source should use single `\n` for newlines, not `\\n\\n`
+   - Detection: SyntaxError "unexpected character after line continuation character"
+   - Prevention: Use NotebookEdit tool or proper JSON manipulation, not manual string editing
+
+2. **LangSmith Dataset Conflicts:**
+   - Problem: 409 Conflict when re-running notebook (dataset already exists)
+   - Fix: Try/except pattern with `read_dataset()` fallback
+   - Benefit: Idempotent notebook execution (can run multiple times safely)
+
+3. **Synthetic Data Quality:**
+   - LLM-generated questions should test diverse RAG aspects:
+     * Specific product queries ("best wireless headphones under $100")
+     * Comparison questions ("compare X vs Y")
+     * Feature-based queries ("headphones with noise cancellation")
+     * Constraint-based queries ("laptop with 16GB RAM")
+   - Include `answer_example` to show expected response quality
+   - Reference context IDs enable retrieval accuracy measurement
+
+4. **Environment Variable Hygiene:**
+   - Always use `load_dotenv()` at the start of notebooks
+   - Check for missing keys before API calls: `os.environ.get("KEY", "default")`
+   - Use `.env.example` to document required variables
+   - Never commit actual `.env` files
+
+5. **LangSmith Dataset Best Practices:**
+   - Use descriptive dataset names: "rag-evaluation-dataset", not "test1"
+   - Include comprehensive descriptions for future reference
+   - Store both inputs AND expected outputs for full evaluation
+   - Reference contexts enable measuring retrieval accuracy separately from generation quality
+   - Versioning: Create new datasets for major changes ("rag-eval-v2")
+
+**Future Enhancements:**
+
+1. **Automated Evaluation Pipeline:**
+   - Run RAG pipeline against all dataset questions
+   - Compare actual answers vs ground truth
+   - Measure metrics: answer similarity, retrieval precision/recall, latency
+
+2. **Human-in-the-Loop Validation:**
+   - Review LLM-generated questions for realism
+   - Add manually curated edge cases
+   - Validate answer_examples for correctness
+
+3. **Continuous Evaluation:**
+   - Run evaluation suite on every code change (CI/CD)
+   - Track metrics over time (Grafana dashboard)
+   - Alert when performance degrades below threshold
+
+4. **Dataset Expansion:**
+   - Generate more diverse questions (100+ examples)
+   - Include failure cases (questions with no good answer)
+   - Multi-turn conversations (follow-up questions)
+
 ### Critical Implementation Details
 
 **API Endpoint Structure:**
