@@ -1,0 +1,5 @@
+/cache
+
+# Serena is NOT a memory management system - it's for stateless code navigation
+# All documentation should live in CLAUDE.md, not in Serena memories
+/memories/

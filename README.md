@@ -1400,6 +1400,315 @@ LANGSMITH_TRACING=true                         # Enable tracing (optional)
 - **Cost Optimization**: Compare expensive vs cheap models objectively
 - **Team Confidence**: Data shows improvements, not guesses
 
+### Sprint 0 / Video 7: RAG Evaluation with RAGAS Metrics
+
+This sprint implements comprehensive evaluation of the RAG pipeline using RAGAS (RAG Assessment) metrics to measure retrieval quality, answer accuracy, and system performance.
+
+**Notebook:** `notebooks/week1/05-RAG-Evals.ipynb`
+
+**What Was Done:**
+
+#### 1. Overview: Why Evaluate RAG Systems?
+
+**The Challenge:**
+- RAG systems have multiple failure modes: bad retrieval, hallucinated answers, irrelevant responses
+- Difficult to know if code changes improve or degrade quality
+- Subjective assessment ("this looks good") doesn't scale
+- Can't compare different approaches objectively (different prompts, models, retrieval strategies)
+
+**The Solution: RAGAS Metrics:**
+- **Systematic Evaluation**: Measure specific aspects of RAG quality (retrieval precision, answer faithfulness, relevance)
+- **Objective Scores**: Numeric metrics (0-1 scale) for quantitative comparison
+- **Repeatable Testing**: Run same evaluation suite after every code change
+- **Data-Driven Decisions**: "Prompt A improved faithfulness by 12%" vs "I think this prompt is better"
+
+#### 2. RAGAS Framework
+
+**What is RAGAS?**
+- **RAG Assessment (RAGAS)**: Open-source framework specifically designed for evaluating RAG systems
+- Created by Exploding Gradients team
+- Provides specialized metrics that understand RAG architecture (retrieval + generation)
+- Integrates with LangSmith, LangChain, and other LLM observability tools
+
+**Why RAGAS (vs Generic Metrics)?**
+- **RAG-Specific**: Metrics designed for retrieval-augmented systems, not just LLM outputs
+- **Component-Level**: Separate metrics for retrieval quality vs generation quality
+- **Reference-Based**: Can use ground truth data for accurate evaluation
+- **No Manual Labeling**: Uses LLMs to evaluate outputs automatically (LLM-as-a-judge pattern)
+
+#### 3. Implemented Metrics
+
+**a) Faithfulness**
+```python
+scorer = Faithfulness(llm=ragas_llm)
+score = await scorer.single_turn_ascore(sample)
+```
+
+**What It Measures:**
+- Whether the generated answer is grounded in the retrieved context
+- Detects hallucinations (LLM making up information not in context)
+- Range: 0 (completely unfaithful) to 1 (perfectly grounded)
+
+**How It Works:**
+1. Extract claims from the generated answer
+2. Check each claim against retrieved context
+3. Score = (verified claims) / (total claims)
+
+**Why It Matters:**
+- Prevents LLM from inventing product details
+- Ensures recommendations are based on actual product data
+- Critical for trustworthy e-commerce applications
+
+**b) Answer Relevancy**
+```python
+scorer = AnswerRelevancy(llm=ragas_llm, embeddings=ragas_embeddings)
+score = await scorer.single_turn_ascore(sample)
+```
+
+**What It Measures:**
+- How relevant the answer is to the user's question
+- Whether the LLM addressed what was actually asked
+- Range: 0 (irrelevant) to 1 (perfectly relevant)
+
+**How It Works:**
+1. Generate hypothetical questions that the answer could address
+2. Compare semantic similarity between original question and hypothetical questions
+3. Higher similarity = more relevant answer
+
+**Why It Matters:**
+- Catches cases where LLM provides correct but off-topic information
+- Example: User asks "wireless headphones", LLM talks about wired headphones
+- Ensures answers actually help the user
+
+**c) ID-Based Context Precision**
+```python
+scorer = IDBasedContextPrecision()
+score = await scorer.single_turn_ascore(sample)
+```
+
+**What It Measures:**
+- How many retrieved products are actually relevant to the question
+- Precision = (relevant retrieved items) / (total retrieved items)
+- Range: 0 (no relevant items retrieved) to 1 (all retrieved items relevant)
+
+**How It Works:**
+1. Compare retrieved product IDs against reference product IDs from evaluation dataset
+2. Count matches vs total retrieved
+3. Measures pure retrieval quality (independent of LLM generation)
+
+**Why It Matters:**
+- Isolates retrieval quality from generation quality
+- Fast evaluation (no LLM calls, just ID comparison)
+- Directly measures semantic search effectiveness
+
+#### 4. Implementation Details
+
+**RAGAS API Evolution:**
+
+The notebook navigates RAGAS's API changes from older versions to the modern API:
+
+**Modern LLM Initialization:**
+```python
+from openai import OpenAI
+from ragas.llms import llm_factory
+
+openai_client = OpenAI()
+ragas_llm = llm_factory("gpt-4o-mini", client=openai_client)
+```
+
+**Why This Approach:**
+- `llm_factory()` is the modern API (deprecated: `LangchainLLMWrapper`)
+- Requires explicit `OpenAI` client instance (text-only mode removed)
+- Returns `InstructorLLM` type compatible with all RAGAS metrics
+
+**Embeddings Wrapper Requirement:**
+```python
+from ragas.embeddings import LangchainEmbeddingsWrapper
+from langchain_openai import OpenAIEmbeddings
+
+ragas_embeddings = LangchainEmbeddingsWrapper(
+    OpenAIEmbeddings(model="text-embedding-3-small")
+)
+```
+
+**Why LangchainEmbeddingsWrapper:**
+- `AnswerRelevancy` metric requires embeddings with `embed_query()` and `embed_documents()` methods
+- RAGAS's native `OpenAIEmbeddings` uses different method names (`embed_text`, `embed_texts`)
+- LangChain wrapper provides compatible interface
+
+**Evaluation Functions:**
+
+Each metric implemented as async function:
+
+```python
+async def ragas_faithfulness(run, example):
+    sample = SingleTurnSample(
+        user_input=run["question"],
+        response=run["answer"],
+        retrieved_contexts=run["retrieved_context"]
+    )
+    scorer = Faithfulness(llm=ragas_llm)
+    return await scorer.single_turn_ascore(sample)
+
+async def ragas_response_relevancy(run, example):
+    sample = SingleTurnSample(
+        user_input=run["question"],
+        response=run["answer"],
+        retrieved_contexts=run["retrieved_context"]
+    )
+    scorer = AnswerRelevancy(llm=ragas_llm, embeddings=ragas_embeddings)
+    return await scorer.single_turn_ascore(sample)
+
+async def ragas_context_precision_id_based(run, example):
+    sample = SingleTurnSample(
+        retrieved_context_ids=run["retrieved_context_ids"],
+        reference_context_ids=example["reference_context_ids"]
+    )
+    scorer = IDBasedContextPrecision()
+    return await scorer.single_turn_ascore(sample)
+```
+
+#### 5. Evaluation Workflow
+
+**Step 1: Load Evaluation Dataset**
+```python
+from langsmith import Client
+
+client = Client()
+dataset = client.read_dataset(dataset_name="rag-evaluation-dataset")
+examples = list(client.list_examples(dataset_id=dataset.id, limit=10))
+```
+
+**Step 2: Run RAG Pipeline**
+```python
+reference_input = examples[0].inputs
+reference_output = examples[0].outputs
+
+result = rag_pipeline(reference_input["question"], top_k=5)
+```
+
+**Step 3: Evaluate with RAGAS Metrics**
+```python
+faithfulness_score = await ragas_faithfulness(result, reference_output)
+relevancy_score = await ragas_response_relevancy(result, reference_output)
+precision_score = await ragas_context_precision_id_based(result, reference_output)
+```
+
+**Step 4: Interpret Scores**
+- **Faithfulness Score**: How well answer is grounded in context
+  - Example: 0.71 = 71% of claims in answer are verified by retrieved context
+- **Relevancy Score**: How well answer addresses the question
+  - Example: 0.0 = Answer completely off-topic (indicates problem with generation)
+- **Precision Score**: How many retrieved products are relevant
+  - Example: 0.2 = Only 20% of retrieved products match reference set (poor retrieval)
+
+#### 6. Key Learnings
+
+**Lesson 1: RAGAS API Migration**
+- **Problem**: `AttributeError: 'Faithfulness' object has no attribute 'single_turn_ascore'`
+- **Root Cause**: Importing from deprecated `ragas.metrics.collections`
+- **Solution**: Import from `ragas.metrics` directly
+- **Modern Pattern**: `from ragas.metrics import Faithfulness, AnswerRelevancy, IDBasedContextPrecision`
+
+**Lesson 2: Embeddings Interface Compatibility**
+- **Problem**: `AttributeError: 'OpenAIEmbeddings' object has no attribute 'embed_query'`
+- **Root Cause**: RAGAS metrics expect LangChain-style embedding interface
+- **Solution**: Use `LangchainEmbeddingsWrapper` around `OpenAIEmbeddings`
+- **Why**: Different embedding providers use different method names
+
+**Lesson 3: LLM Factory Requirements**
+- **Problem**: `ValueError: llm_factory() requires a client instance`
+- **Root Cause**: Modern RAGAS API removed text-only mode
+- **Solution**: Explicitly instantiate `OpenAI()` client and pass to `llm_factory()`
+- **Benefit**: More control over API configuration (timeouts, retries, etc.)
+
+#### 7. Benefits of Systematic Evaluation
+
+**Before Evaluation:**
+- "This answer looks good" (subjective)
+- No way to measure improvement
+- Regressions go unnoticed
+- Can't compare different approaches
+
+**After Evaluation:**
+- "Faithfulness improved from 0.65 to 0.78" (objective)
+- Track metrics over time
+- Catch regressions in CI/CD
+- Data-driven decisions on model/prompt changes
+
+**Real-World Use Cases:**
+- **A/B Testing**: Compare GPT-4o-mini vs GPT-5-nano (cost vs quality trade-off)
+- **Prompt Engineering**: Test different system prompts objectively
+- **Retrieval Tuning**: Measure impact of changing top_k parameter
+- **Model Selection**: Evaluate different embedding models
+- **Regression Detection**: Alert when code changes degrade metrics
+
+#### 8. Integration with LangSmith
+
+**Dataset-Driven Evaluation:**
+- Evaluation dataset created in Video 6 (`rag-evaluation-dataset`)
+- Contains reference questions and expected product IDs
+- RAGAS metrics compare RAG outputs against reference data
+
+**Observability Integration:**
+- LangSmith tracing (from Video 5) works during evaluation
+- Can inspect traces for failed evaluation cases
+- Debug why specific questions scored low
+
+**Complete Evaluation Loop:**
+```
+LangSmith Dataset (Video 6)
+      ↓
+RAG Pipeline (Video 4)
+      ↓
+RAGAS Metrics (Video 7)
+      ↓
+Scores + Insights
+```
+
+#### 9. Production Considerations
+
+**Not Implemented (Future Work):**
+- **Batch Evaluation**: Run metrics on entire dataset, not just one example
+- **Metric Aggregation**: Calculate mean/median/p95 scores across dataset
+- **Automated Reports**: Generate evaluation reports with charts
+- **CI/CD Integration**: Run evaluation on every PR, block if scores drop
+- **Threshold Alerts**: Alert when metrics fall below acceptable levels
+- **Historical Tracking**: Store scores in database, visualize trends over time
+
+**When to Add:**
+- Batch evaluation: After validating metrics work on individual examples
+- CI/CD integration: When moving to production deployment
+- Monitoring dashboards: When tracking system quality over time
+
+#### 10. Next Steps
+
+**Immediate:**
+- Evaluate entire dataset (all 43 examples)
+- Calculate aggregate metrics (mean faithfulness, mean relevancy, etc.)
+- Identify failure patterns (which types of questions score poorly?)
+
+**Advanced:**
+- Implement additional RAGAS metrics (ContextRecall, ContextUtilization)
+- A/B test different prompts and compare scores
+- Experiment with different LLMs (GPT-4o vs GPT-5-nano)
+- Test retrieval strategies (top_k=3 vs top_k=10)
+- Add human evaluation for qualitative insights
+
+**Tools & Dependencies:**
+```bash
+# Added in this sprint
+uv add ragas>=0.4.3        # RAGAS evaluation framework
+uv add langgraph>=1.0.7    # Required dependency for RAGAS
+```
+
+**Required Environment Variables:**
+```env
+OPENAI_API_KEY=sk-...              # For embeddings + LLM evaluation
+LANGSMITH_API_KEY=lsv2_pt_...      # For dataset access
+LANGSMITH_PROJECT=rag-tracing      # Project organization
+```
+
 ## API Endpoints
 
 ### FastAPI Backend (`http://localhost:8000`)
