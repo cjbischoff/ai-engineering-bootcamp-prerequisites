@@ -423,7 +423,8 @@ def rag_pipeline(question, top_k=5):
         - question: Echo back for validation and logging
     """
     # Initialize Qdrant client (connects to vector database)
-    qdrant_client = QdrantClient(url="http://qdrant:6333")
+    # Use localhost for local development, qdrant for Docker Compose
+    qdrant_client = QdrantClient(url="http://localhost:6333")
 
     # Step 1: Retrieve k most relevant products based on semantic similarity
     retrieved_context = retrieve_data(question, qdrant_client, top_k)

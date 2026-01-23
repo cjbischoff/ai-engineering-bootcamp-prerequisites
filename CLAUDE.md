@@ -710,6 +710,234 @@ This section covers creating synthetic evaluation datasets for testing the RAG p
    - Include failure cases (questions with no good answer)
    - Multi-turn conversations (follow-up questions)
 
+**8. RAG Evaluation with RAGAS (Video 8)**
+
+This section covers the automated evaluation system for measuring RAG pipeline quality using RAGAS metrics.
+
+**Overview:**
+- **Tool**: RAGAS (RAG Assessment) - Framework for RAG-specific evaluation metrics
+- **Script**: `apps/api/evals/eval_retriever.py`
+- **Purpose**: Systematically measure retrieval quality, generation quality, and end-to-end RAG performance
+- **Dataset**: Runs against "rag-evaluation-dataset" (43 examples created in Video 6)
+- **Results**: Viewable in LangSmith UI with detailed per-example scores
+
+**Why RAGAS Evaluation:**
+- **Objective Metrics**: Replace subjective "looks good" with quantifiable scores
+- **Regression Detection**: Catch when code changes degrade RAG quality
+- **Bottleneck Identification**: Pinpoint if issues are in retrieval or generation
+- **A/B Testing**: Compare different prompts, models, or retrieval strategies
+- **Continuous Improvement**: Track quality improvements over time
+
+**Architecture:**
+
+**a) File Structure:**
+```
+apps/api/evals/
+├── __init__.py              # Makes 'evals' a Python package (required)
+└── eval_retriever.py        # Main evaluation script with RAGAS metrics
+```
+
+**b) Evaluation Metrics (4 metrics total):**
+
+1. **Faithfulness** (`ragas_faithfulness`)
+   - **Question**: "Is the LLM making things up or staying grounded in retrieved context?"
+   - **How it works**: LLM judge checks if answer statements can be verified from retrieved products
+   - **Score**: 0 (hallucination) to 1 (fully grounded)
+   - **Why it matters**: Prevents LLM from inventing product features
+   - **Requires**: LLM for judging (gpt-4.1-mini)
+
+2. **Response Relevancy** (`ragas_response_relevancy`)
+   - **Question**: "Does the answer actually address the user's question?"
+   - **How it works**: Generate hypothetical questions from answer, compare to original via embeddings
+   - **Score**: 0 (off-topic) to 1 (highly relevant)
+   - **Why it matters**: Prevents generic or evasive responses
+   - **Requires**: LLM + embeddings (gpt-4.1-mini + text-embedding-3-small)
+
+3. **Context Precision (ID-Based)** (`ragas_context_precision_id_based`)
+   - **Question**: "What percentage of retrieved products are actually relevant?"
+   - **Formula**: `|retrieved ∩ reference| / |retrieved|`
+   - **Score**: 0 (all noise) to 1 (all relevant)
+   - **Why it matters**: High precision = user sees mostly relevant products
+   - **Requires**: No LLM (just ID comparison)
+
+4. **Context Recall (ID-Based)** (`ragas_context_recall_id_based`)
+   - **Question**: "What percentage of relevant products did we successfully retrieve?"
+   - **Formula**: `|retrieved ∩ reference| / |reference|`
+   - **Score**: 0 (missed everything) to 1 (found all relevant items)
+   - **Why it matters**: High recall = user doesn't miss good options
+   - **Requires**: No LLM (just ID comparison)
+
+**c) Evaluator Function Pattern:**
+
+Each metric is a Python function that scores a single example:
+
+```python
+def ragas_faithfulness(run, example):
+    """
+    Evaluator function called by LangSmith for each dataset example.
+
+    Args:
+        run: LangSmith Run object with RAG pipeline outputs
+        example: LangSmith Example object with reference data (unused for faithfulness)
+
+    Returns:
+        float: Score between 0 and 1
+    """
+    # Extract outputs safely (pipeline might have errored)
+    outputs = run.outputs if isinstance(run.outputs, dict) else {}
+
+    # Create RAGAS sample structure
+    sample = SingleTurnSample(
+        user_input=outputs.get("question", ""),
+        response=outputs.get("answer", ""),
+        retrieved_contexts=outputs.get("retrieved_context", [])
+    )
+
+    # Initialize scorer and compute score
+    scorer = Faithfulness(llm=ragas_llm)
+    return scorer.single_turn_score(sample)
+```
+
+**Key patterns:**
+- **Defensive extraction**: Use `.get()` with defaults (pipeline might error)
+- **Type checking**: Verify `run.outputs` is a dict before accessing
+- **Synchronous execution**: Evaluators are regular functions (not async)
+- **RAGAS data structure**: Must use `SingleTurnSample` for RAGAS compatibility
+
+**d) LangSmith Integration:**
+
+```python
+results = ls_client.evaluate(
+    lambda x: rag_pipeline(x["question"]),        # Target function to evaluate
+    data="rag-evaluation-dataset",                # LangSmith dataset name
+    evaluators=[                                  # List of scoring functions
+        ragas_faithfulness,
+        ragas_response_relevancy,
+        ragas_context_precision_id_based,
+        ragas_context_recall_id_based
+    ],
+    experiment_prefix="retriever",                # Naming for results
+    max_concurrency=5                             # Parallel execution
+)
+```
+
+**What this does:**
+1. Fetches all 43 examples from "rag-evaluation-dataset"
+2. For each example: Calls `rag_pipeline(question)`
+3. For each result: Runs all 4 evaluator functions
+4. Stores 172 total scores (43 examples × 4 metrics) in LangSmith
+5. Returns aggregated results and URL to view in UI
+
+**e) Running Evaluations:**
+
+**Makefile target:**
+```bash
+make run-evals-retriever
+```
+
+**What it does:**
+```bash
+# 1. Sync dependencies (ensure ragas, langsmith installed)
+uv sync
+
+# 2. Run evaluation with proper environment setup
+PYTHONPATH=${PWD}/apps/api/src:$PYTHONPATH:${PWD} \
+  uv run --env-file .env \
+  python apps/api/evals/eval_retriever.py
+```
+
+**Critical PYTHONPATH setup:**
+- Adds `apps/api/src` so `from api.agents...` works
+- Adds project root for any root-level imports
+- `$$` in Makefile escapes `$` for shell variables
+
+**Lessons Learned:**
+
+1. **Module Structure Requirements**
+   - Problem: `ModuleNotFoundError: No module named 'api.evals'`
+   - Cause: Missing `__init__.py` in `apps/api/evals/` directory
+   - Fix: Create `apps/api/evals/__init__.py` (can be empty or with docstring)
+   - Prevention: Every Python package directory needs `__init__.py`
+
+2. **Async/Sync Execution Context**
+   - Problem: `RuntimeError: There is no current event loop in thread`
+   - Cause: Evaluator functions were `async def` but LangSmith runs evaluators in thread pools
+   - Fix: Use regular `def` (not `async def`) and `scorer.single_turn_score()` (not `await ...ascore()`)
+   - Takeaway: LangSmith evaluators must be synchronous functions
+
+3. **LangSmith Run Object Structure**
+   - Problem: `TypeError: 'RunTree' object is not subscriptable` with `run["question"]`
+   - Cause: `run` is a RunTree object, not a dict
+   - Fix: Access via `run.outputs["question"]` to get the outputs dictionary
+   - Pattern: `run.outputs` contains pipeline return value, `run.inputs` contains pipeline inputs
+
+4. **Defensive Data Access**
+   - Problem: `KeyError: 'question'` when pipeline errors on some examples
+   - Cause: If RAG pipeline fails, `run.outputs` might not have expected keys
+   - Fix: Use `outputs = run.outputs if isinstance(run.outputs, dict) else {}` and `.get()` with defaults
+   - Benefit: Evaluation continues even if some examples fail
+
+5. **Qdrant Connection in Local Execution**
+   - Problem: `qdrant:6333` doesn't resolve when running locally (outside Docker)
+   - Cause: `qdrant` is a Docker Compose service name, not a hostname
+   - Fix: Changed `retrieval_generation.py` to use `http://localhost:6333`
+   - Trade-off: Works for local eval script, but breaks in Docker (need to revert for Docker)
+   - Better solution: Pass `qdrant_url` as parameter (not implemented yet)
+
+6. **Transient API Errors**
+   - Problem: `openai.APIConnectionError: Connection error` during evaluation
+   - Cause: Network instability or OpenAI API rate limits
+   - Status: Not a code bug - evaluation continues and processes most examples
+   - Mitigation: Reduce `max_concurrency` (from 5 to 2-3) if errors are frequent
+   - Impact: Only affects `ragas_response_relevancy` (requires OpenAI calls for judging)
+
+7. **RAGAS Dependencies**
+   - Required: `ragas`, `langsmith`, `langchain-openai` packages
+   - Models: gpt-4.1-mini for LLM judge, text-embedding-3-small for embeddings
+   - Why same embedding model: Must match preprocessing embeddings for consistency
+   - Cost: Evaluation calls OpenAI API (judge LLM + similarity embeddings)
+
+**Evaluation Results Interpretation:**
+
+**Good Scores:**
+- **Faithfulness > 0.8**: Answers are grounded in retrieved context
+- **Response Relevancy > 0.7**: Answers address the question
+- **Precision > 0.6**: More than half of retrieved products are relevant
+- **Recall > 0.5**: Retrieving at least half of relevant products
+
+**Warning Signs:**
+- **Low Faithfulness (<0.5)**: LLM is hallucinating, not using context
+- **Low Relevancy (<0.5)**: Answers are generic or off-topic
+- **Low Precision (<0.4)**: Too much noise in retrieval results (increase similarity threshold)
+- **Low Recall (<0.3)**: Missing relevant products (increase top_k or lower similarity threshold)
+
+**Precision vs Recall Trade-off:**
+- High `top_k` → Better recall (find more), worse precision (more noise)
+- Low `top_k` → Better precision (less noise), worse recall (miss some)
+- Optimal: Balance based on use case (e.g., top_k=5-10 for e-commerce)
+
+**Next Steps:**
+
+1. **Optimize Retrieval Parameters:**
+   - Experiment with `top_k` (default 5)
+   - Experiment with similarity threshold filtering
+   - Re-run evaluations after each change
+
+2. **Improve Prompts:**
+   - Modify system prompt in `build_prompt()`
+   - Test different instruction phrasing
+   - Compare results in LangSmith
+
+3. **Expand Dataset:**
+   - Add more test questions (current: 43)
+   - Include edge cases and failure scenarios
+   - Test multi-turn conversations
+
+4. **Continuous Evaluation:**
+   - Run `make run-evals-retriever` before every commit
+   - Track scores over time (manual or automated)
+   - Create baseline scores for comparison
+
 ### Critical Implementation Details
 
 **API Endpoint Structure:**
