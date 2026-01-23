@@ -48,3 +48,12 @@ data/Electronics_2022_2023_with_category_ratings_100.jsonl
 
 # Qdrant vector database storage (runtime data)
 qdrant_storage/
+
+# Claude Code project-specific documentation (keep in global ~/.claude/CLAUDE.md instead)
+CLAUDE.md
+
+# Claude Code local settings (user-specific, not for repo)
+.claude/
+
+# Serena LSP server cache (IDE tooling)
+.serena/
