@@ -6,6 +6,8 @@
 #
 # How to use:
 #   make run-docker-compose    # Start all services
+#   make health                # Check infrastructure health
+#   make smoke-test            # Test RAG pipeline end-to-end
 #   make clean-notebook-outputs # Clean Jupyter outputs
 #   make run-evals-retriever   # Run RAG evaluation
 
@@ -29,6 +31,42 @@ clean-notebook-outputs:
 	# Use nbconvert to clear outputs in-place for all notebooks
 	# notebooks/**/*.ipynb = all .ipynb files in notebooks/ and subdirectories
 	uv run jupyter nbconvert --clear-output --inplace notebooks/**/*.ipynb
+
+# Target: health
+# Purpose: Verify infrastructure health (containers, ports, Qdrant collection)
+# When to use: Session startup, after service restarts, or when debugging
+# Output: Colored checkmarks/X marks for each component
+health:
+	# Sync dependencies to ensure qdrant-client and requests are available
+	uv sync
+	# Run health check script with full output
+	uv run scripts/health_check.py
+
+# Target: health-silent
+# Purpose: Same as 'health' but only shows failures (useful for scripts/CI)
+# When to use: Automated checks where you only care about failures
+# Output: Only prints failed checks
+health-silent:
+	uv sync
+	uv run scripts/health_check.py --silent
+
+# Target: smoke-test
+# Purpose: Run end-to-end test of RAG pipeline with real query
+# When to use: After code changes, before deployment, or when debugging
+# Output: Test results with response summary
+smoke-test:
+	# Sync dependencies to ensure requests library is available
+	uv sync
+	# Run smoke test with default query
+	uv run scripts/smoke_test.py
+
+# Target: smoke-test-verbose
+# Purpose: Same as 'smoke-test' but shows full JSON response
+# When to use: Debugging response structure issues or verifying exact output
+# Output: Full test results plus complete JSON response
+smoke-test-verbose:
+	uv sync
+	uv run scripts/smoke_test.py --verbose
 
 # Target: run-evals-retriever
 # Purpose: Run RAGAS evaluation metrics against the RAG pipeline
