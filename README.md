@@ -852,9 +852,18 @@ Uses Pydantic for automatic validation and serialization:
 class RAGRequest(BaseModel):
     query: str = Field(..., description="The query to be used in the RAG pipeline")
 
+class RAGUsedContext(BaseModel):
+    """Product metadata for frontend display (Video 3 enhancement)."""
+    image_url: Optional[str] = Field(None, description="The URL of the image of the item")
+    price: Optional[float] = Field(None, description="The price of the item")
+    description: str = Field(..., description="The description of the item")
+
 class RAGResponse(BaseModel):
     request_id: str = Field(..., description="The request ID")
     answer: str = Field(..., description="The answer to the query")
+    used_context: list[RAGUsedContext] = Field(
+        ..., description="Information about the items used to answer the query"
+    )
 ```
 
 **Why Pydantic:**
@@ -863,15 +872,30 @@ class RAGResponse(BaseModel):
 - **OpenAPI Generation**: Field descriptions appear in auto-generated API documentation
 - **Error Messages**: Returns 422 Unprocessable Entity with detailed validation errors
 
+**Video 3 Enhancement - Rich Product Context:**
+- **RAGUsedContext Model**: Represents enriched product information (images, prices, descriptions)
+- **Optional Fields**: `image_url` and `price` are Optional to handle nullable Qdrant data gracefully
+  - Qdrant may not have images/prices for all products
+  - Frontend can show placeholders when fields are None
+  - Prevents ValidationError on None values for required float fields
+- **Frontend Integration**: Enables visual product cards with images and pricing in the UI
+- **Grounding**: Shows users the actual products backing the LLM's recommendations
+
 **d) API Endpoints ([endpoints.py](apps/api/src/api/api/endpoints.py))**
 
-The main RAG endpoint:
+The main RAG endpoint (Video 3 enhanced with product enrichment):
 
 ```python
 @rag_router.post("/")
 def rag(request: Request, payload: RAGRequest) -> RAGResponse:
-    answer = rag_pipeline(payload.query)
-    return RAGResponse(request_id=request.state.request_id, answer=answer)
+    answer = rag_pipeline_wrapper(payload.query)  # Video 3: Uses wrapper for enrichment
+    return RAGResponse(
+        request_id=request.state.request_id,
+        answer=answer["answer"],
+        used_context=[
+            RAGUsedContext(**used_context) for used_context in answer["used_context"]
+        ],
+    )
 ```
 
 **Design Decisions:**
@@ -879,6 +903,12 @@ def rag(request: Request, payload: RAGRequest) -> RAGResponse:
 - **Request Object**: Access middleware-injected `request_id` from `request.state`
 - **Return Type**: Pydantic `RAGResponse` automatically serialized to JSON
 - **Error Handling**: Not implemented (production would need try/except blocks)
+
+**Video 3 Changes:**
+- **Wrapper Function**: Uses `rag_pipeline_wrapper()` instead of `rag_pipeline()` for product metadata enrichment
+- **Response Structure**: Returns dict with `answer` and `used_context` fields
+- **Context Construction**: Unpacks dict items into `RAGUsedContext` Pydantic models using `**used_context` spread
+- **Frontend Data**: Provides image URLs and prices for visual product cards
 
 **e) RAG Pipeline ([retrieval_generation.py](apps/api/src/api/agents/retrieval_generation.py))**
 
@@ -917,6 +947,93 @@ Production implementation of the 5-step RAG workflow from the notebook:
 - Entry point: Single function call executes entire workflow
 - Connection: Creates new Qdrant client per request (inefficient, needs pooling)
 
+**7. Product Enrichment Wrapper (Video 3 Enhancement):**
+
+The `rag_pipeline_wrapper()` function enriches RAG responses with product metadata for rich frontend display:
+
+```python
+def rag_pipeline_wrapper(question: str, top_k: int = 5) -> dict:
+    """
+    Enriches RAG pipeline results with product metadata (images and prices).
+
+    Wrapper pattern separates presentation enrichment from core RAG logic.
+    Returns dict with 'answer' (str) and 'used_context' (list of product metadata).
+    """
+    qdrant_client = QdrantClient(url="http://qdrant:6333")
+    result = rag_pipeline(question, top_k)
+
+    used_context = []
+    dummy_vector = np.zeros((1536,)).tolist()
+
+    for item in result.get("references", []):
+        # Query Qdrant by product ID using filter
+        payload = qdrant_client.query_points(
+            collection_name="Amazon-items-collection-00",
+            query=dummy_vector,
+            limit=1,
+            with_payload=True,
+            query_filter=Filter(must=[
+                FieldCondition(key="parent_asin", match=MatchValue(value=item.id))
+            ])
+        ).points[0].payload
+
+        used_context.append({
+            "image_url": payload.get("image"),
+            "price": payload.get("price"),
+            "description": item.description
+        })
+
+    return {
+        "answer": result["answer"],
+        "used_context": used_context
+    }
+```
+
+**Why This Approach:**
+
+- **Wrapper Pattern**: Keeps core `rag_pipeline()` logic unchanged while adding presentation-layer enrichment
+- **Separation of Concerns**: RAG logic (retrieval + generation) separated from frontend data fetching
+- **Instructor Integration**: Uses structured outputs from `generate_answer()` with `RAGGenerationResponse` model
+  - LLM returns answer + list of product references with IDs and descriptions
+  - Structured outputs via instructor library ensure reliable JSON parsing
+
+**Technical Implementation:**
+
+- **Qdrant Filtering by ID**: Uses dummy zero vector with `query_filter` to fetch by `parent_asin`
+  - Why dummy vector: Qdrant `query_points()` requires a query vector for API compatibility
+  - Filter ensures only exact ID match is returned (limit=1)
+  - More efficient than semantic search when ID is known
+
+- **Docker Networking**: Uses `http://qdrant:6333` service name, not localhost
+  - Docker Compose DNS resolves service names to container IPs
+  - Localhost in container context refers to container itself, not other services
+
+- **Graceful Degradation**: Uses `.get()` for nullable fields (image, price)
+  - Qdrant data quality varies: some products lack images/prices
+  - Returns None instead of KeyError
+  - Pydantic Optional[] fields handle None values without validation errors
+
+- **LangSmith Tracing**: Decorated with `@traceable` for observability
+  - Tracks enrichment performance separately from core RAG
+  - Helps identify bottlenecks in Qdrant metadata fetching
+
+**Performance Considerations:**
+
+- **N+1 Query Problem**: One Qdrant query per product (5 queries for top_k=5)
+  - Could be optimized with batch `scroll()` or `retrieve()` if IDs are known upfront
+  - Current approach prioritizes code clarity for educational purposes
+
+- **Client Pooling**: Creates new QdrantClient per request
+  - Production should use connection pooling for efficiency
+  - Consider singleton pattern or dependency injection
+
+**Data Flow:**
+
+1. Call `rag_pipeline()` → Get LLM answer + structured product references (IDs + descriptions)
+2. For each product reference → Query Qdrant by ID to fetch image_url and price
+3. Construct `used_context` list with enriched product metadata
+4. Return dict with `answer` (str) and `used_context` (list) for API response
+
 #### 3. Docker Integration
 
 **Service Communication:**
@@ -951,6 +1068,35 @@ Production implementation of the 5-step RAG workflow from the notebook:
 - FastAPI automatically returns 422 (not 500) for invalid requests
 - Field descriptions improve auto-generated documentation quality
 - Type hints catch bugs early during development
+
+**Instructor response_model Parameter (Video 3):**
+- **Problem**: `KeyError: 'answer'` when instructor doesn't return structured output
+- **Root Cause**: Missing `response_model` parameter in `create_with_completion()` call
+- **Fix**: Explicitly pass `response_model=RAGGenerationResponse` to instructor
+- **Why**: Instructor needs the Pydantic model to know what structure to extract from LLM
+- **Detection**: Runtime KeyError when accessing expected dictionary keys
+
+**Pydantic Optional Fields for Nullable Data (Video 3):**
+- **Problem**: `ValidationError: price - Input should be a valid number [type=float_type, input_value=None]`
+- **Root Cause**: Qdrant data has nullable fields (image, price) but Pydantic expected required values
+- **Fix**: Use `Optional[float]` and `Optional[str]` with `Field(None, ...)` for nullable fields
+- **Why**: Qdrant data quality varies - some products lack images/prices
+- **Benefit**: Graceful degradation - API returns partial data instead of failing validation
+- **Frontend Impact**: UI can show placeholders when fields are None
+
+**Qdrant Filter-Based Queries with Dummy Vectors (Video 3):**
+- **Technique**: Use `np.zeros((1536,)).tolist()` as query vector with `query_filter`
+- **Why Needed**: `query_points()` requires a query vector but we're filtering by exact ID
+- **Filter**: `Filter(must=[FieldCondition(key="parent_asin", match=MatchValue(value=id))])`
+- **Alternative**: Could use `scroll()` or `retrieve()` for ID-based lookup without vector
+- **Trade-off**: Slightly inefficient but maintains API consistency with semantic search
+
+**Import Statement Syntax (Video 3):**
+- **Problem**: `import qdrant_client.models import Filter` causes SyntaxError
+- **Root Cause**: Invalid Python syntax - mixing import styles
+- **Fix**: Use `from qdrant_client.models import Filter, FieldCondition, MatchValue`
+- **Detection**: Immediate SyntaxError on file load, not runtime
+- **Prevention**: Careful transcription from images, IDE syntax highlighting
 
 **RAG vs Pure LLM:**
 - Pure LLM may hallucinate product details or have outdated knowledge

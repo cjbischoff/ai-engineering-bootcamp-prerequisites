@@ -18,8 +18,8 @@ import logging
 
 from fastapi import APIRouter, Request
 
-from api.agents.retrieval_generation import rag_pipeline
-from api.api.models import RAGRequest, RAGResponse
+from api.agents.retrieval_generation import rag_pipeline_wrapper
+from api.api.models import RAGRequest, RAGResponse, RAGUsedContext
 
 # Configure logging to track API requests and errors
 # Format includes timestamp, logger name, level (INFO/ERROR), and message
@@ -90,18 +90,41 @@ def rag(request: Request, payload: RAGRequest) -> RAGResponse:
         - Add timeout to prevent long-running queries
         - Validate query length and content (prevent injection)
     """
-    # Run the complete RAG pipeline: retrieve context and generate answer
-    # This calls the 5-step process: embed -> retrieve -> format -> prompt -> generate
-    # Changed in Video 5: rag_pipeline now returns a dict with answer + metadata
-    answer = rag_pipeline(payload.query)
+    # Run the complete RAG pipeline with enrichment: retrieve context, generate answer, and fetch metadata
+    # Changed in Video 3: Now uses rag_pipeline_wrapper instead of rag_pipeline
+    # This wrapper adds product images and prices from Qdrant for rich frontend display
+    answer = rag_pipeline_wrapper(payload.query)
 
-    # Return structured response with request ID for tracing
+    # Return structured response with request ID for tracing and enriched product context
     # request.state.request_id was set by RequestIDMiddleware
-    # Changed in Video 5: Extract answer["answer"] instead of using answer directly
-    # Why: rag_pipeline now returns {"answer": str, "question": str, "retrieved_context_ids": list, ...}
-    #      but the API response only needs the answer field (metadata is for internal observability)
-    # Future enhancement: Could expose retrieved_context_ids to frontend for "Products used" feature
-    return RAGResponse(request_id=request.state.request_id, answer=answer["answer"])
+    #
+    # Changed in Video 3: Added used_context field with product metadata
+    # Structure:
+    #   - answer (str): Natural language response from LLM
+    #   - used_context (list[RAGUsedContext]): Product cards for frontend
+    #       Each item contains: image_url, price, description
+    #
+    # Why this structure?
+    #   - Frontend can display visual product cards with images and prices
+    #   - Separates enrichment logic (wrapper) from core RAG logic
+    #   - Enables rich UI without modifying core pipeline
+    #
+    # Example response:
+    # {
+    #   "request_id": "uuid...",
+    #   "answer": "The best headphones are...",
+    #   "used_context": [
+    #     {"image_url": "...", "price": 39.99, "description": "TELSOR Earbuds..."},
+    #     ...
+    #   ]
+    # }
+    return RAGResponse(
+        request_id=request.state.request_id,
+        answer=answer["answer"],
+        used_context=[
+            RAGUsedContext(**used_context) for used_context in answer["used_context"]
+        ],
+    )
 
 
 # Create main API router and mount the RAG router

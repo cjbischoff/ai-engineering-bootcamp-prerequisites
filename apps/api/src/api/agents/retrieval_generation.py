@@ -31,6 +31,87 @@ Observability (Video 5):
 import openai
 from langsmith import get_current_run_tree, traceable
 from qdrant_client import QdrantClient
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+from pydantic import BaseModel, Field
+import instructor
+import numpy as np
+
+from api.api.models import RAGResponse
+
+# Define nested Pydantic models for grounded structured outputs
+
+
+class RAGUsedContext(BaseModel):
+    """
+    Represents a single product reference (grounding context).
+
+    This model captures information about one product that was used
+    to generate the answer. Multiple instances of this model will be
+    returned in the references list.
+
+    Fields:
+        id: The product ASIN (Amazon Standard Identification Number)
+            - Unique identifier for the product
+            - Can be used to link back to full product details
+            - Example: "B09X12ABC"
+
+        description: Short human-readable summary (1-2 sentences)
+            - Should include the product name
+            - Brief description of what the product is
+            - Example: "GREPHONE USB-C to Lightning Cable - 6ft MFi certified charging cable"
+
+    Why this structure?
+        - Balances detail vs. brevity
+        - ID enables programmatic lookup
+        - Description enables human understanding
+    """
+
+    id: str = Field(description="The unique identifier to the answer the question")
+    description: str = Field(
+        description="Short description of the item used to answer the question"
+    )
+
+
+class RAGGenerationResponse(BaseModel):
+    """
+    Complete structured response with grounding context.
+
+    This is the TOP-LEVEL model that instructor will validate and return.
+    It contains both the answer and the list of source references.
+
+    Fields:
+        answer: The full natural language answer to the user's question
+            - Should be detailed and informative
+            - Should reference products by name
+            - Should include specifications in bullet points
+
+        references: List of RAGUsedContext objects (grounding)
+            - CRITICAL: Only include products actually used in the answer
+            - Not all retrieved products will be used
+            - The LLM must decide which products are relevant
+            - Each reference links the answer back to its source
+
+    Why nested structure?
+        - Instructor automatically validates nested Pydantic models
+        - Type-safe: references must be list[RAGUsedContext]
+        - Self-documenting: structure makes relationship clear
+        - Enables rich tooling: IDEs can autocomplete fields
+
+    Common Pitfall:
+        Don't confuse retrieved_context (all products fetched from DB)
+        with references (only products used in answer). The LLM performs
+        this filtering based on relevance to the specific question.
+    """
+
+    answer: str = Field(description="The answer to the question")
+    references: list[RAGUsedContext] = Field(
+        description="List of items used to generate the answer"
+    )
+
+
+
+
+
 
 
 @traceable(
@@ -260,6 +341,15 @@ You will be given a question and a list of context.
 Instructions:
 - You need to answer the question based on the provided context only.
 - Never use word context and refer to it as the available products.
+- As an output you need to provide:
+
+* The answer to the question based on the provided context.
+* The list of the IDs of the chunks that were used to answer the question. Only return the ones that are used in the answer.
+* Short description (1-2 sentences) of the item based on the description provided in the context.
+
+- The short description should have the name of the item.
+- The answer to the question should contain detailed information about the product and returned with detailed specification in bullet points.
+
 
 Context:
 {preprocessed_context}
@@ -274,7 +364,7 @@ Question:
 @traceable(
     name="Generate Answer",  # Display name in LangSmith trace UI
     run_type="llm",  # Categorizes this span as an LLM call
-    metadata={"ls_model_name": "gpt-5-nano", "ls_provider": "openai"},  # Static metadata for filtering traces
+    metadata={"ls_model_name": "gpt-4.1-mini", "ls_provider": "openai"},  # Static metadata for filtering traces
 )
 def generate_answer(prompt):
     """
@@ -325,10 +415,13 @@ def generate_answer(prompt):
         - We need token counts for accurate cost monitoring
         - Enables analysis: "Which queries are most expensive?"
     """
-    response = openai.chat.completions.create(
-        model="gpt-5-nano",
+    client = instructor.from_openai(openai.OpenAI())
+
+    response, raw_response = client.chat.completions.create_with_completion(
+        model="gpt-4.1-mini",
+        response_model=RAGGenerationResponse,
         messages=[{"role": "system", "content": prompt}],
-        reasoning_effort="minimal",
+        temperature=0,
     )
 
     # Manual instrumentation: Capture OpenAI API usage for cost tracking
@@ -339,12 +432,12 @@ def generate_answer(prompt):
         # Attach detailed token usage to the current trace span
         # This appears in LangSmith UI under "Metadata" for this LLM call
         current_run.metadata["usage_metadata"] = {
-            "input_tokens": response.usage.prompt_tokens,  # All prompt text (instructions + context + question)
-            "output_tokens": response.usage.completion_tokens,  # Generated answer length
-            "total_tokens": response.usage.total_tokens,  # Total tokens processed (input + output)
+            "input_tokens": raw_response.usage.prompt_tokens,  # All prompt text (instructions + context + question)
+            "output_tokens": raw_response.usage.completion_tokens,  # Generated answer length
+            "total_tokens": raw_response.usage.total_tokens,  # Total tokens processed (input + output)
         }
 
-    return response.choices[0].message.content
+    return response
 
 
 @traceable(
@@ -423,8 +516,8 @@ def rag_pipeline(question, top_k=5):
         - question: Echo back for validation and logging
     """
     # Initialize Qdrant client (connects to vector database)
-    # Use localhost for local development, qdrant for Docker Compose
-    qdrant_client = QdrantClient(url="http://localhost:6333")
+    # Use qdrant service name for Docker Compose networking
+    qdrant_client = QdrantClient(url="http://qdrant:6333")
 
     # Step 1: Retrieve k most relevant products based on semantic similarity
     retrieved_context = retrieve_data(question, qdrant_client, top_k)
@@ -447,7 +540,8 @@ def rag_pipeline(question, top_k=5):
     #   - Analytics: Track which products are most frequently retrieved
     #   - Validation: Echo back question to ensure correct processing
     final_result = {
-        "answer": answer,  # Natural language response from LLM
+        "answer": answer.answer,  # Natural language response from LLM
+        "references": answer.references,  # List of RAGUsedContext objects
         "question": question,  # Original user query (for validation/logging)
         "retrieved_context_ids": retrieved_context["retrieved_context_ids"],  # Product ASINs
         "retrieved_context": retrieved_context["retrieved_context"],  # Product descriptions
@@ -455,3 +549,125 @@ def rag_pipeline(question, top_k=5):
     }
 
     return final_result
+
+
+def rag_pipeline_wrapper(question: str, top_k: int = 5) -> dict:
+    """
+    Enriches RAG pipeline results with product metadata (images and prices).
+
+    This wrapper function extends the core rag_pipeline by fetching additional
+    product metadata from Qdrant for display purposes. It keeps the core RAG
+    logic unchanged while adding presentation-layer enhancements.
+
+    Video 3 Enhancement: Adding Rich Product Context
+    ------------------------------------------------
+    The basic RAG pipeline returns product IDs and descriptions, but for a
+    rich frontend experience, we need images and pricing. This wrapper:
+    1. Calls the standard rag_pipeline to get the answer + product IDs
+    2. For each referenced product, queries Qdrant for full metadata
+    3. Returns enriched data suitable for visual product cards in the UI
+
+    Args:
+        question (str): User's natural language query
+        top_k (int): Number of products to retrieve (default: 5)
+
+    Returns:
+        dict: Structured response containing:
+            - answer (str): Natural language answer from LLM
+            - used_context (list[dict]): Product metadata for each referenced item
+                Each item contains:
+                - image_url (str | None): Product image URL from Qdrant
+                - price (float | None): Product price from Qdrant
+                - description (str): Product description from LLM references
+
+    Why a Wrapper Pattern?
+    ----------------------
+    - Keeps core rag_pipeline focused on retrieval + generation
+    - Separates data enrichment (presentation) from core logic
+    - Allows testing/using rag_pipeline independently
+    - Easy to add more metadata fields (ratings, reviews) later
+
+    Implementation Details:
+    -----------------------
+    - Uses dummy vector for Qdrant query (we're filtering by ID, not similarity)
+    - Queries Qdrant once per referenced product (could batch for optimization)
+    - Handles nullable fields (some products may lack images/prices)
+    - Docker networking: Uses "qdrant:6333" service name (not localhost)
+
+    Example Response:
+    ----------------
+    {
+        "answer": "The best wireless headphones are...",
+        "used_context": [
+            {
+                "image_url": "https://amazon.com/image.jpg",
+                "price": 39.99,
+                "description": "TELSOR Wireless Earbuds..."
+            },
+            ...
+        ]
+    }
+
+    Performance Considerations:
+    --------------------------
+    - N+1 query pattern: One Qdrant query per product reference
+    - Could batch queries if performance becomes an issue
+    - Typically only 2-3 products referenced, so overhead is minimal
+    - Consider caching product metadata if same products frequently appear
+    """
+    # Initialize Qdrant client with Docker service name for inter-container communication
+    # Note: Use "qdrant" (service name) not "localhost" when running in Docker Compose
+    qdrant_client = QdrantClient(url="http://qdrant:6333")
+
+    # Step 1: Get the base RAG result (answer + product references)
+    # This calls the full RAG pipeline: embed → retrieve → generate
+    result = rag_pipeline(question, top_k)
+
+    # Step 2: Initialize list to collect enriched product context
+    used_context = []
+
+    # Create a dummy embedding vector for Qdrant query
+    # We're filtering by product ID (parent_asin), so the vector value doesn't matter
+    # But Qdrant's query_points requires a query vector, so we use zeros
+    # Shape: (1536,) matches OpenAI text-embedding-3-small dimensionality
+    dummy_vector = np.zeros((1536,)).tolist()
+
+    # Step 3: For each product referenced in the LLM's answer, fetch full metadata
+    # Note: result["references"] contains only products the LLM actually used
+    # (not all retrieved products - the LLM filters for relevance)
+    for item in result.get("references", []):
+        # Query Qdrant for this specific product using its ASIN (Amazon ID)
+        # Filter ensures we get exactly the product we want (not similar products)
+        payload = qdrant_client.query_points(
+            collection_name="Amazon-items-collection-00",  # Collection created during preprocessing
+            query=dummy_vector,  # Required by API but not used (we're filtering by ID)
+            limit=1,  # We only want this specific product
+            with_payload=True,  # Include all metadata fields (image, price, etc.)
+            query_filter=Filter(must=[
+                # Exact match filter: Find product with this specific parent_asin
+                FieldCondition(
+                    key="parent_asin",  # Field name in Qdrant payload
+                    match=MatchValue(value=item.id)  # The ASIN from LLM references
+                )
+            ])
+        ).points[0].payload  # Extract the payload dict from the first (only) result
+
+        # Extract presentation metadata from Qdrant payload
+        # These fields may be None if data is missing (handled by Optional[] in models)
+        image_url = payload.get("image")  # Product image URL (Optional[str])
+        price = payload.get("price")  # Product price (Optional[float])
+
+        # Append enriched context to results
+        # Combines Qdrant metadata (image, price) with LLM description
+        used_context.append({
+            "image_url": image_url,  # May be None
+            "price": price,  # May be None
+            "description": item.description  # From LLM's RAGUsedContext
+        })
+
+    # Step 4: Return enriched response for the API endpoint
+    # Structure matches what RAGResponse expects in endpoints.py
+    return {
+        "answer": result["answer"],  # Natural language answer from LLM
+        "used_context": used_context  # Enriched product metadata for frontend
+    }
