@@ -72,6 +72,129 @@ docker compose up --build
 - **Qdrant Dashboard**: http://localhost:6333/dashboard
 - **Qdrant API**: http://localhost:6333
 
+### 6. Verify Everything Works
+
+Run health checks to ensure all services are running correctly:
+
+```bash
+make health
+```
+
+This checks:
+- Docker containers are running (api, streamlit-app, qdrant)
+- Ports are listening (8000, 8501, 6333)
+- Qdrant collection is loaded with documents
+- API is responding
+
+Run an end-to-end smoke test of the RAG pipeline:
+
+```bash
+make smoke-test
+```
+
+This tests:
+- RAG API endpoint responds correctly
+- Response structure matches expected format
+- Product recommendations include images and prices
+- Response time is acceptable
+
+## Testing & Health Checks
+
+### Health Check Script
+
+The `scripts/health_check.py` script verifies infrastructure health:
+
+**Full output:**
+```bash
+make health
+```
+
+**Silent mode (only show failures):**
+```bash
+make health-silent
+```
+
+**What it checks:**
+- ✓ Docker containers running (api, streamlit-app, qdrant)
+- ✓ Network ports listening (8000, 8501, 6333, 6334)
+- ✓ Qdrant collection exists and has documents
+- ✓ API is responding
+
+**When to use:**
+- At session startup to verify environment
+- After restarting services
+- When debugging infrastructure issues
+- Before making code changes
+
+### Smoke Test Script
+
+The `scripts/smoke_test.py` script runs an end-to-end test of the RAG pipeline:
+
+**Summary output:**
+```bash
+make smoke-test
+```
+
+**Verbose (shows full JSON response):**
+```bash
+make smoke-test-verbose
+```
+
+**What it tests:**
+- ✓ API responds with status 200
+- ✓ Response is valid JSON
+- ✓ Response structure matches Pydantic models
+- ✓ Response time is acceptable (< 20 seconds)
+- ✓ Answer is generated
+- ✓ Product context includes images and prices
+
+**When to use:**
+- After making code changes to RAG pipeline
+- Before committing changes
+- When debugging RAG quality issues
+- To verify end-to-end functionality
+
+**Example output:**
+```
+🧪 Smoke Test: RAG Pipeline
+ℹ Query: best wireless headphones under $100
+✓ API responded with status 200 in 11.90s
+✓ Response is valid JSON
+✓ Response structure valid: Valid structure with 4 products
+✓ Response time acceptable: 11.90s < 20.0s
+✓ Answer generated (1613 chars)
+✓ Products in context: 4
+
+✅ Smoke test PASSED - RAG pipeline is working correctly
+```
+
+### Development Workflow
+
+**Recommended workflow for each session:**
+
+1. **Start services:**
+   ```bash
+   make run-docker-compose
+   ```
+
+2. **Verify health (in new terminal):**
+   ```bash
+   make health
+   ```
+
+3. **Make your code changes** while monitoring logs
+
+4. **Test your changes:**
+   ```bash
+   make smoke-test
+   ```
+
+5. **Commit if tests pass:**
+   ```bash
+   git add .
+   git commit -m "Your commit message"
+   ```
+
 ## Project Structure
 
 ```
@@ -2054,7 +2177,17 @@ docker compose up --build --force-recreate
 ## Makefile Commands
 
 ```bash
+# Service Management
 make run-docker-compose       # Sync dependencies and run Docker Compose
+
+# Testing & Health Checks
+make health                   # Check infrastructure health (full output)
+make health-silent            # Check health (only show failures)
+make smoke-test               # Run end-to-end RAG pipeline test
+make smoke-test-verbose       # Run smoke test with full JSON response
+make run-evals-retriever      # Run RAGAS evaluation metrics
+
+# Development
 make clean-notebook-outputs   # Clear Jupyter notebook outputs
 ```
 
