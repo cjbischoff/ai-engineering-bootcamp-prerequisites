@@ -24,6 +24,7 @@ members = [
 
 [dependency-groups]
 dev = [
+    "fastembed>=0.7.4",
     "langgraph>=1.0.7",
     "langsmith>=0.6.4",
     "matplotlib>=3.10.8",
