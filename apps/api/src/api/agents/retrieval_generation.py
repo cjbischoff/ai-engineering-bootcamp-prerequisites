@@ -28,15 +28,20 @@ Observability (Video 5):
   * Enables debugging: "Why did this query return a poor answer?"
 """
 
-import openai
-from langsmith import get_current_run_tree, traceable
-from qdrant_client import QdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchValue
-from pydantic import BaseModel, Field
 import instructor
 import numpy as np
-
-from api.api.models import RAGResponse
+import openai
+from langsmith import get_current_run_tree, traceable
+from pydantic import BaseModel, Field
+from qdrant_client import QdrantClient
+from qdrant_client.models import (
+    Document,
+    FieldCondition,
+    Filter,
+    FusionQuery,
+    MatchValue,
+    Prefetch,
+)
 
 # Define nested Pydantic models for grounded structured outputs
 
@@ -109,15 +114,13 @@ class RAGGenerationResponse(BaseModel):
     )
 
 
-
-
-
-
-
 @traceable(
     name="Get Embedding",  # Display name in LangSmith trace UI
     run_type="embedding",  # Categorizes this span as an embedding operation
-    metadata={"ls_model_name": "text-embedding-3-small", "ls_provider": "openai"},  # Static metadata attached to all traces
+    metadata={
+        "ls_model_name": "text-embedding-3-small",
+        "ls_provider": "openai",
+    },  # Static metadata attached to all traces
 )
 def get_embedding(text, model="text-embedding-3-small"):
     """
@@ -170,7 +173,9 @@ def get_embedding(text, model="text-embedding-3-small"):
     return response.data[0].embedding
 
 
-@traceable(name="Retrieve Data", run_type="retriever")  # LangSmith categorizes as a retrieval operation
+@traceable(
+    name="Retrieve Data", run_type="retriever"
+)  # LangSmith categorizes as a retrieval operation
 def retrieve_data(query, qdrant_client, k=5):
     """
     Retrieve top-k most relevant products from Qdrant vector database.
@@ -217,9 +222,15 @@ def retrieve_data(query, qdrant_client, k=5):
 
     # Step 2: Search Qdrant for k nearest neighbors using cosine similarity
     results = qdrant_client.query_points(
-        collection_name="Amazon-items-collection-00",  # Collection created in preprocessing notebook
-        query=query_embedding,
-        limit=k,
+        collection_name="Amazon-items-collection-01-hybrid-search",
+        prefetch=[
+            Prefetch(query=query_embedding, using="text-embedding-3-small", limit=20),
+            Prefetch(
+                query=Document(text=query, model="qdrant/bm25"), using="bm25", limit=20
+            ),
+        ],
+        query=FusionQuery(fusion="rrf"),
+        limit=k,  #
     )
 
     # Step 3: Initialize lists to store retrieved data
@@ -248,7 +259,9 @@ def retrieve_data(query, qdrant_client, k=5):
     }
 
 
-@traceable(name="Format Retrieved Context", run_type="prompt")  # LangSmith categorizes as prompt formatting
+@traceable(
+    name="Format Retrieved Context", run_type="prompt"
+)  # LangSmith categorizes as prompt formatting
 def process_context(context):
     """
     Format retrieved product data into a human-readable string for the LLM.
@@ -295,7 +308,9 @@ def process_context(context):
     return formatted_context
 
 
-@traceable(name="Build Prompt", run_type="prompt")  # LangSmith categorizes as prompt construction
+@traceable(
+    name="Build Prompt", run_type="prompt"
+)  # LangSmith categorizes as prompt construction
 def build_prompt(preprocessed_context, question):
     """
     Construct the final prompt sent to the language model.
@@ -364,7 +379,10 @@ Question:
 @traceable(
     name="Generate Answer",  # Display name in LangSmith trace UI
     run_type="llm",  # Categorizes this span as an LLM call
-    metadata={"ls_model_name": "gpt-4.1-mini", "ls_provider": "openai"},  # Static metadata for filtering traces
+    metadata={
+        "ls_model_name": "gpt-4.1-mini",
+        "ls_provider": "openai",
+    },  # Static metadata for filtering traces
 )
 def generate_answer(prompt):
     """
@@ -543,9 +561,15 @@ def rag_pipeline(question, top_k=5):
         "answer": answer.answer,  # Natural language response from LLM
         "references": answer.references,  # List of RAGUsedContext objects
         "question": question,  # Original user query (for validation/logging)
-        "retrieved_context_ids": retrieved_context["retrieved_context_ids"],  # Product ASINs
-        "retrieved_context": retrieved_context["retrieved_context"],  # Product descriptions
-        "similarity_scores": retrieved_context["similarity_scores"],  # Cosine similarity (0-1)
+        "retrieved_context_ids": retrieved_context[
+            "retrieved_context_ids"
+        ],  # Product ASINs
+        "retrieved_context": retrieved_context[
+            "retrieved_context"
+        ],  # Product descriptions
+        "similarity_scores": retrieved_context[
+            "similarity_scores"
+        ],  # Cosine similarity (0-1)
     }
 
     return final_result
@@ -638,19 +662,28 @@ def rag_pipeline_wrapper(question: str, top_k: int = 5) -> dict:
     for item in result.get("references", []):
         # Query Qdrant for this specific product using its ASIN (Amazon ID)
         # Filter ensures we get exactly the product we want (not similar products)
-        payload = qdrant_client.query_points(
-            collection_name="Amazon-items-collection-00",  # Collection created during preprocessing
-            query=dummy_vector,  # Required by API but not used (we're filtering by ID)
-            limit=1,  # We only want this specific product
-            with_payload=True,  # Include all metadata fields (image, price, etc.)
-            query_filter=Filter(must=[
-                # Exact match filter: Find product with this specific parent_asin
-                FieldCondition(
-                    key="parent_asin",  # Field name in Qdrant payload
-                    match=MatchValue(value=item.id)  # The ASIN from LLM references
-                )
-            ])
-        ).points[0].payload  # Extract the payload dict from the first (only) result
+        payload = (
+            qdrant_client.query_points(
+                collection_name="Amazon-items-collection-01-hybrid-search",  # Collection created during preprocessing
+                query=dummy_vector,  # Required by API but not used (we're filtering by ID)
+                limit=1,  # We only want this specific product
+                using="text-embedding-3-small",
+                with_payload=True,  # Include all metadata fields (image, price, etc.)
+                query_filter=Filter(
+                    must=[
+                        # Exact match filter: Find product with this specific parent_asin
+                        FieldCondition(
+                            key="parent_asin",  # Field name in Qdrant payload
+                            match=MatchValue(
+                                value=item.id
+                            ),  # The ASIN from LLM references
+                        )
+                    ]
+                ),
+            )
+            .points[0]
+            .payload
+        )  # Extract the payload dict from the first (only) result
 
         # Extract presentation metadata from Qdrant payload
         # These fields may be None if data is missing (handled by Optional[] in models)
@@ -659,15 +692,17 @@ def rag_pipeline_wrapper(question: str, top_k: int = 5) -> dict:
 
         # Append enriched context to results
         # Combines Qdrant metadata (image, price) with LLM description
-        used_context.append({
-            "image_url": image_url,  # May be None
-            "price": price,  # May be None
-            "description": item.description  # From LLM's RAGUsedContext
-        })
+        used_context.append(
+            {
+                "image_url": image_url,  # May be None
+                "price": price,  # May be None
+                "description": item.description,  # From LLM's RAGUsedContext
+            }
+        )
 
     # Step 4: Return enriched response for the API endpoint
     # Structure matches what RAGResponse expects in endpoints.py
     return {
         "answer": result["answer"],  # Natural language answer from LLM
-        "used_context": used_context  # Enriched product metadata for frontend
+        "used_context": used_context,  # Enriched product metadata for frontend
     }
