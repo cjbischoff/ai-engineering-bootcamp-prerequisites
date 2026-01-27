@@ -1,0 +1,735 @@
+# Cursor AI Rules for AI Engineering Bootcamp Prerequisites Project
+
+## Project Context
+
+This is an AI Engineering Bootcamp learning project implementing a RAG (Retrieval-Augmented Generation) chatbot application with:
+
+- **Backend**: FastAPI (Python 3.12+)
+- **Frontend**: Streamlit
+- **Vector DB**: Qdrant (Docker)
+- **Package Manager**: uv (NOT pip/poetry/pipenv)
+- **LLM Providers**: OpenAI, Groq, Google GenAI, Cohere
+- **Architecture**: uv workspace with multiple apps
+
+## Core Technologies
+
+### Python Stack
+- **Language**: Python 3.12+ (defined in `.python-version`)
+- **Package Manager**: `uv` (modern, fast alternative to pip)
+- **Virtual Environment**: `.venv/` (managed by uv)
+- **Dependencies**: Defined in workspace `pyproject.toml`
+
+### Application Structure
+```
+apps/
+├── api/              # FastAPI backend service
+│   └── src/api/      # API source code (NOT apps/api/api/)
+└── chatbot_ui/       # Streamlit frontend
+```
+
+### Key Frameworks
+- **FastAPI**: Async web framework with OpenAPI docs
+- **Pydantic**: Data validation and settings management
+- **Qdrant**: Vector database for semantic search
+- **LangSmith**: Prompt management and monitoring (Week 2/Video 7)
+- **Cohere**: Reranking with cross-encoders (Week 2/Video 6)
+
+---
+
+## Session Startup Workflow (CRITICAL)
+
+**ALWAYS start sessions with:**
+1. `git status && git branch` - Check current state
+2. `make run-docker-compose` - Start services in FOREGROUND (watch logs)
+3. `make health` - Verify infrastructure (new terminal)
+
+**Why foreground matters:**
+- **Live debugging**: See API logs in real-time
+- **Hot reload visibility**: Confirm FastAPI reloads after changes
+- **Error detection**: Catch import/validation errors immediately
+- **Request tracing**: Follow API requests through pipeline
+
+---
+
+## Complete File Structure
+
+### Root Level
+```
+ai-engineering-bootcamp-prerequisites_me/
+├── .env                    # Environment variables (NEVER commit)
+├── env.example             # Environment template (commit this)
+├── .python-version         # Python 3.12+ requirement
+├── pyproject.toml          # uv workspace config (root)
+├── uv.lock                 # Locked dependencies
+├── docker-compose.yml      # Container orchestration
+├── Makefile                # Common commands
+├── main.py                 # Project entry point
+├── README.md               # Project overview
+├── CLAUDE.MD               # Complete project guide (1,682 lines)
+├── .gitignore              # Git exclusions
+├── .vscode/                # Cursor/VS Code config
+│   ├── settings.json       # Editor settings
+│   ├── extensions.json     # Recommended extensions
+│   ├── launch.json         # Debug configurations
+│   └── CURSOR-SETUP.md     # Cursor setup guide
+└── .cursorrules            # Cursor AI context rules (THIS FILE)
+```
+
+### Apps Directory (Backend + Frontend)
+```
+apps/
+├── api/                              # FastAPI Backend
+│   ├── pyproject.toml                # API dependencies
+│   ├── Dockerfile                    # API container config
+│   ├── README.md                     # API documentation
+│   ├── src/api/                      # Source code (src in PYTHONPATH)
+│   │   ├── app.py                    # FastAPI app initialization
+│   │   ├── core/                     # Core configuration
+│   │   │   └── config.py             # Settings (pydantic-settings)
+│   │   ├── api/                      # API layer
+│   │   │   ├── endpoints.py          # Route handlers
+│   │   │   ├── models.py             # Pydantic schemas
+│   │   │   └── middleware.py         # Custom middleware
+│   │   └── agents/                   # RAG Pipeline
+│   │       ├── retrieval_generation.py   # Main RAG logic (28K lines!)
+│   │       ├── README.md                 # Agent documentation
+│   │       ├── prompts/                  # YAML prompt configs
+│   │       │   ├── retrieval_generation.yaml  # Main prompt
+│   │       │   └── README.md
+│   │       └── utils/                    # Utilities
+│   │           ├── prompt_management.py  # YAML loader
+│   │           └── README.md
+│   └── evals/                        # RAGAS Evaluation
+│       ├── eval_retriever.py         # Retriever metrics
+│       └── README.md                 # Evaluation guide
+│
+└── chatbot_ui/                       # Streamlit Frontend
+    ├── pyproject.toml                # UI dependencies
+    ├── Dockerfile                    # UI container config
+    ├── README.md                     # UI documentation
+    └── src/chatbot_ui/               # Source code
+        ├── app.py                    # Streamlit app
+        └── core/                     # Configuration
+            └── config.py
+```
+
+### Scripts Directory (Testing & Utilities)
+```
+scripts/
+├── health_check.py         # Infrastructure verification
+│                          # Checks: containers, ports, Qdrant, API
+│                          # Usage: make health
+│
+└── smoke_test.py          # End-to-end RAG testing
+                           # Tests: API, JSON, Pydantic, LLM, enrichment
+                           # Usage: make smoke-test
+```
+
+### Notebooks Directory (Learning Material)
+```
+notebooks/
+├── week0/                              # Week 0: Foundations
+│   ├── 01-llm-apis.ipynb              # LLM API basics
+│   └── README.md
+│
+├── week1/                              # Week 1: RAG Basics
+│   ├── 01-explore-amazon-dataset.ipynb    # Dataset exploration
+│   ├── 02-RAG-preprocessing-Amazon.ipynb  # Data preprocessing
+│   ├── 03-RAG-pipeline.ipynb              # Basic RAG pipeline
+│   ├── 04-evaluation-dataset.ipynb        # Eval dataset creation
+│   ├── 05-RAG-Evals.ipynb                 # RAGAS metrics
+│   └── README.md
+│
+└── week2/                              # Week 2: Advanced RAG
+    ├── 01-Structured-Outputs-Intro.ipynb          # Structured outputs
+    ├── 02-Structured-Outputs-RAG-Pipeline.ipynb   # Instructor + Pydantic
+    ├── 03-Hybrid-Search.ipynb                     # Dense + Sparse search
+    ├── 04-Reranking.ipynb                         # Cohere cross-encoder
+    ├── 05-Prompt-Versioning.ipynb                 # YAML + Jinja2
+    ├── prompts/                                   # Learning YAML files
+    │   └── retrieval_generation.yaml
+    └── README.md
+```
+
+### Data Directory (Datasets)
+```
+data/
+├── meta_Electronics_2022_2023_with_category_ratings_over_100_sample_1000.jsonl
+│   # 1,000 products (sample dataset for development)
+│
+├── meta_Electronics_2022_2023_with_category_ratings_over_100.jsonl
+│   # ~17,000 products (full dataset for production)
+│
+└── [Other Amazon Electronics datasets...]
+    # Various preprocessed versions of Amazon product metadata
+```
+
+### Generated Directories (Git Ignored)
+```
+.venv/                  # Python virtual environment (uv managed)
+qdrant_storage/         # Qdrant vector database persistence
+__pycache__/            # Python bytecode cache
+.pytest_cache/          # Pytest cache
+.mypy_cache/            # Mypy type checker cache
+.ruff_cache/            # Ruff linter cache
+```
+
+---
+
+## Import Path Examples (CRITICAL)
+
+**Because `apps/api/src` is in PYTHONPATH:**
+```python
+# ✅ CORRECT - Import from api package
+from api.api.models import RAGResponse
+from api.agents.retrieval_generation import rag_pipeline
+from api.agents.utils.prompt_management import prompt_template_config
+from api.core.config import Settings
+
+# ❌ WRONG - These will fail
+from apps.api.src.api.models import RAGResponse
+from src.api.models import RAGResponse
+```
+
+**File paths (relative to project root):**
+```python
+# ✅ CORRECT - Works in both local and Docker
+yaml_file = "apps/api/src/api/agents/prompts/retrieval_generation.yaml"
+
+# ❌ WRONG - Only works in Docker container
+yaml_file = "api/agents/prompts/retrieval_generation.yaml"
+```
+
+---
+
+## Key File Locations Reference
+
+**Configuration:**
+- Root deps: `pyproject.toml` (workspace)
+- API deps: `apps/api/pyproject.toml`
+- UI deps: `apps/chatbot_ui/pyproject.toml`
+- Environment: `.env` (secrets), `env.example` (template)
+
+**API Code:**
+- FastAPI app: `apps/api/src/api/app.py`
+- Routes: `apps/api/src/api/api/endpoints.py`
+- Models: `apps/api/src/api/api/models.py`
+- RAG pipeline: `apps/api/src/api/agents/retrieval_generation.py`
+- Prompts: `apps/api/src/api/agents/prompts/*.yaml`
+
+**Testing:**
+- Health check: `scripts/health_check.py`
+- Smoke test: `scripts/smoke_test.py`
+- Evals: `apps/api/evals/eval_retriever.py`
+
+**Learning:**
+- Notebooks: `notebooks/week{0,1,2}/*.ipynb`
+- Complete guide: `CLAUDE.MD`
+- Cursor setup: `.vscode/CURSOR-SETUP.md`
+
+---
+
+## Development Rules
+
+### 1. Package Management (CRITICAL)
+
+**ALWAYS use `uv` for dependency management:**
+```bash
+# ✅ CORRECT
+uv add fastapi
+uv sync
+uv lock
+
+# ❌ WRONG - Never use these
+pip install fastapi
+poetry add fastapi
+pipenv install fastapi
+```
+
+**When adding dependencies:**
+1. Add to appropriate `pyproject.toml` (root, api, or chatbot_ui)
+2. Run `uv lock` to update lock file
+3. If Docker container, rebuild: `docker compose build api`
+
+### 2. Import Paths (CRITICAL)
+
+**Python imports use `api.X` (NOT `apps.api.src.api.X`):**
+```python
+# ✅ CORRECT
+from api.api.models import RAGResponse
+from api.agents.retrieval_generation import rag_pipeline
+
+# ❌ WRONG
+from apps.api.src.api.models import RAGResponse
+from src.api.models import RAGResponse
+```
+
+**Why**: `apps/api/src` is in PYTHONPATH, making `api` the root import package.
+
+### 3. Docker Development Workflow
+
+**Service names in Docker Compose (NOT localhost):**
+```python
+# ✅ CORRECT (from container)
+qdrant_client = QdrantClient(url="http://qdrant:6333")
+
+# ❌ WRONG (only works outside Docker)
+qdrant_client = QdrantClient(url="http://localhost:6333")
+```
+
+**Development workflow:**
+```bash
+# Start services and watch logs (foreground)
+make run-docker-compose
+
+# OR start in background (new terminal for logs)
+docker compose up -d
+docker compose logs -f api
+
+# After code changes, FastAPI hot reload picks them up automatically
+# After dependency changes, rebuild container
+uv lock && docker compose build api && docker compose up -d
+```
+
+### 4. Code Quality Standards
+
+**Pydantic Models:**
+- Use `Optional[T]` for nullable fields (not `T | None` unless Python 3.10+)
+- Define `Field()` descriptions for auto-generated OpenAPI docs
+- Use `model_validate()` not `parse_obj()` (Pydantic v2)
+
+**Error Handling:**
+- Catch specific exceptions, not bare `except:`
+- Log errors with context (request_id, query, etc.)
+- Return proper HTTP status codes (FastAPI `HTTPException`)
+
+**Type Hints:**
+- Always use type hints for function signatures
+- Use `from typing import Optional, List, Dict` for compatibility
+- Prefer built-in types (`list`, `dict`) over `List`, `Dict` when possible (Python 3.9+)
+
+### 5. Testing Workflow
+
+**Before making changes:**
+```bash
+git status && git branch  # Check current state
+make health               # Verify infrastructure
+```
+
+**After code changes:**
+```bash
+make smoke-test           # End-to-end RAG pipeline test
+```
+
+---
+
+### Test Scripts Reference
+
+#### Health Check (`scripts/health_check.py`)
+
+**Usage:**
+```bash
+make health              # Full output with colored checkmarks
+make health-silent       # Only show failures (for CI/scripts)
+```
+
+**Checks:**
+- ✓ Docker containers running (api, streamlit-app, qdrant)
+- ✓ Ports listening (8000, 8501, 6333, 6334)
+- ✓ Qdrant collection exists and has documents
+- ✓ API endpoint responding
+
+**When to use:**
+- Session startup (ALWAYS after `make run-docker-compose`)
+- After service restarts
+- When debugging (identify failing component)
+- Before making changes
+
+**Exit codes:** 0=success, 1=failure
+
+---
+
+#### Smoke Test (`scripts/smoke_test.py`)
+
+**Usage:**
+```bash
+make smoke-test          # Summary output with test results
+make smoke-test-verbose  # Full JSON response included
+```
+
+**Tests:**
+- ✓ RAG API endpoint responds with HTTP 200
+- ✓ Valid JSON response
+- ✓ Response matches Pydantic models (RAGResponse schema)
+- ✓ LLM answer is generated (non-empty)
+- ✓ Product context includes enriched metadata
+
+**When to use:**
+- After RAG changes (retrieval_generation.py, models.py, endpoints.py)
+- Before committing
+- After dependency updates
+- When debugging quality issues
+
+**Exit codes:** 0=success, 1=failure
+
+---
+
+### Recommended Testing Workflow
+
+```bash
+# 1. Start session and verify health
+make run-docker-compose  # Terminal 1: Watch logs
+make health              # Terminal 2: Verify infrastructure
+
+# 2. Make your code changes
+# ... edit files ...
+
+# 3. Test changes (hot reload should pick them up)
+make smoke-test          # Verify end-to-end functionality
+
+# 4. If tests pass, commit
+git add .
+git commit -m "Your descriptive commit message"
+```
+
+---
+
+### Troubleshooting Tests
+
+**Health check fails:**
+- Check Docker is running: `docker ps`
+- Restart services: `docker compose restart`
+- Check logs: `docker compose logs -f`
+
+**Smoke test fails:**
+- Verify API keys in `.env` (OPENAI_KEY, GOOGLE_API_KEY, or GROQ_API_KEY)
+- Check health first: `make health`
+- View API logs: `docker compose logs -f api`
+- Verify Qdrant collection: `make health` shows collection status
+
+**Smoke test timeout:**
+- First run takes longer (model initialization)
+- Check API container logs for errors
+- Ensure at least one LLM provider API key is valid
+
+---
+
+## Make Commands Reference
+
+### Development Commands
+```bash
+make run-docker-compose  # Sync deps + start services (foreground, watch logs)
+make up                  # Start services (background)
+make down                # Stop all services
+make health              # Verify infrastructure health
+make health-silent       # Health check (only show failures)
+make smoke-test          # End-to-end RAG pipeline test
+make smoke-test-verbose  # Smoke test with full JSON response
+```
+
+### Maintenance Commands
+```bash
+make install                    # Install dependencies with uv
+make clean-notebook-outputs     # Clean Jupyter outputs before commit
+make run-evals-retriever        # Run RAGAS evaluation metrics
+```
+
+### Quick Reference
+- **First time setup**: `make install` → `make up` → `make health`
+- **Daily workflow**: `make run-docker-compose` (Terminal 1) → `make health` (Terminal 2)
+- **Before commit**: `make smoke-test` → `make clean-notebook-outputs` (if edited notebooks)
+- **After dependency change**: `uv lock` → `docker compose build api` → `make up`
+
+---
+
+## API Keys & Environment Setup
+
+### Required API Keys
+
+**In `.env` file (NEVER commit this file):**
+```bash
+# At least ONE of these LLM providers required:
+OPENAI_KEY=sk-...                    # OpenAI API (optional, quota may exceed)
+GOOGLE_API_KEY=AIza...               # Google GenAI (recommended)
+GROQ_API_KEY=gsk_...                 # Groq API (recommended, fast inference)
+
+# Optional (for Week 2 features):
+COHERE_API_KEY=...                   # Cohere reranking (Week 2/Video 6)
+LANGSMITH_API_KEY=...                # LangSmith prompt registry (Week 2/Video 7)
+```
+
+### Setup Instructions
+
+**First time:**
+```bash
+# 1. Copy template
+cp env.example .env
+
+# 2. Edit .env and add your API keys
+vim .env  # or nano .env, or use any editor
+
+# 3. Verify keys are loaded
+cat .env | grep -v "^#" | grep "="
+
+# 4. Start services
+make up
+```
+
+### Provider Recommendations
+
+- **Google GenAI**: Best for development (generous free tier, fast)
+- **Groq**: Best for production (fastest inference, low cost)
+- **OpenAI**: Good for compatibility (most tested, may hit quota)
+- **Cohere**: Only needed for reranking feature (Week 2/Video 6)
+
+### Security Rules
+
+- ❌ **NEVER** commit `.env` file to Git (already in `.gitignore`)
+- ✅ **ALWAYS** use `env.example` as template (committed to Git)
+- ❌ **NEVER** hardcode API keys in source code
+- ✅ **ALWAYS** load from environment variables
+
+### Troubleshooting
+
+**API key errors:**
+```bash
+# Check .env file exists
+ls -la .env
+
+# Verify format (no spaces around =)
+OPENAI_KEY=sk-...  # ✅ Correct
+OPENAI_KEY = sk-... # ❌ Wrong (spaces)
+
+# Restart containers after changing .env
+docker compose restart api
+```
+
+---
+
+## Related Documentation
+
+### Project Documentation
+- **CLAUDE.md** - Complete project guide (1,682 lines, comprehensive)
+- **README.md** - Project overview and quick start
+- **Makefile** - All available commands (run `make help` if available)
+- **env.example** - Required environment variables template
+- **.vscode/CURSOR-SETUP.md** - Cursor IDE setup guide (654 lines)
+
+### API Documentation
+- **FastAPI Docs** - Interactive API docs at `http://localhost:8000/docs` (when running)
+- **FastAPI ReDoc** - Alternative docs at `http://localhost:8000/redoc`
+
+### Learning Notebooks
+- **Week 0**: `notebooks/week0/` - LLM API basics
+- **Week 1**: `notebooks/week1/` - RAG fundamentals, preprocessing, evaluation
+- **Week 2**: `notebooks/week2/` - Structured outputs, hybrid search, reranking, prompts
+
+### Specific Topics
+- **Hybrid Search**: `notebooks/week2/03-Hybrid-Search.ipynb`
+- **Reranking**: `notebooks/week2/04-Reranking.ipynb`
+- **Prompt Management**: `notebooks/week2/05-Prompt-Versioning.ipynb`
+- **RAG Evaluation**: `apps/api/evals/README.md`
+- **Agent Architecture**: `apps/api/src/api/agents/README.md`
+
+### External Resources
+- **uv Documentation**: https://docs.astral.sh/uv/
+- **FastAPI Documentation**: https://fastapi.tiangolo.com/
+- **Qdrant Documentation**: https://qdrant.tech/documentation/
+- **Pydantic Documentation**: https://docs.pydantic.dev/
+
+---
+
+## Git Branching Strategy (Bootcamp Sprints)
+
+### Branch Structure
+- **Naming**: `sprint/1`, `sprint/2`, `sprint/3`
+- **Scope**: One sprint = All videos in that sprint
+- **Lifecycle**: Create from `main` → Merge to `main` → Keep permanently
+
+### Commit Convention
+**Format**: Conventional commits (never reference Claude/Cursor)
+```bash
+feat(sprint2): complete video 3 - langraph implementation
+fix(sprint2): correct agent pipeline validation
+docs(sprint2): add multi-agent architecture docs
+refactor(sprint2): optimize agent orchestration
+test(sprint2): add unit tests for agent tools
+```
+
+### Workflow (CLI-Only)
+```bash
+# Start sprint
+git checkout main && git checkout -b sprint/2
+
+# Per video (repeat 6-9 times)
+git add . && git commit -m "feat(sprint2): complete video N - description"
+git push origin sprint/2
+
+# Complete sprint
+gh pr create --base main --head sprint/2 --title "Sprint 2: Agents & Agentic Systems" --body "Completed all videos for Sprint 2. Ready for review."
+gh pr status  # Check CodeRabbit review
+gh pr merge sprint/2 --merge
+git checkout main && git pull origin main
+```
+
+### Rules
+- ✅ All work in sprint branches (including hotfixes)
+- ✅ Push after each video commit (backup protection)
+- ✅ Use conventional commit format
+- ✅ Merge via GitHub CLI PR (CodeRabbit reviews)
+- ✅ Sprint branches stay in GitHub permanently
+- ❌ Never commit directly to `main`
+- ❌ Never delete sprint branches
+- ❌ Never reference Claude/Cursor in commits
+- ❌ Never merge without PR review
+
+### Current Sprint
+**Sprint 2: Agents & Agentic Systems**
+- Branch: `sprint/2`
+- Status: In progress
+
+### GitHub CLI Commands
+```bash
+gh pr status              # Check PR status
+gh pr view sprint/2       # View specific PR
+gh pr list                # List all PRs
+gh pr checks sprint/2     # View CI/review checks
+gh pr merge sprint/2 --merge  # Merge approved PR
+```
+
+---
+
+### 6. Configuration Management
+
+**Environment Variables:**
+- Define in `.env` (NEVER commit this file)
+- Template in `env.example` (check this into Git)
+- Load with `pydantic-settings` or `python-dotenv`
+
+**Prompt Configuration (Week 2/Video 7 pattern):**
+- Externalize prompts to YAML files with Jinja2 templates
+- Location: `apps/api/src/api/agents/prompts/`
+- Load with `prompt_management.py` utility
+- Version with semantic versioning in metadata
+
+**File paths:**
+```python
+# ✅ CORRECT (relative to project root, works in Docker)
+yaml_file = "apps/api/src/api/agents/prompts/retrieval_generation.yaml"
+
+# ❌ WRONG (container-only path)
+yaml_file = "api/agents/prompts/retrieval_generation.yaml"
+```
+
+### 7. RAG Pipeline Architecture
+
+**Stages:**
+1. **Hybrid Search** (Week 2/Video 5): Dense + Sparse vectors with RRF fusion
+2. **Reranking** (Week 2/Video 6): Optional Cohere cross-encoder refinement
+3. **LLM Generation**: OpenAI/Groq/Google GenAI with structured output
+
+**Collections:**
+- Dense-only: `Amazon-items-collection-01`
+- Hybrid search: `Amazon-items-collection-01-hybrid-search`
+
+**Key parameters:**
+- `top_k=20` for prefetch (before reranking)
+- `top_k=5` for final results (after reranking)
+- RRF fusion with `k=60` (default, no tuning needed)
+
+### 8. Common Pitfalls to Avoid
+
+**❌ Never do these:**
+1. Use `pip` instead of `uv`
+2. Import with `apps.api.src.api.*` paths
+3. Use `localhost` in Docker container networking
+4. Skip `uv lock` after dependency changes
+5. Use `git add .` without reading `.gitignore` (avoid committing `.env`)
+6. Edit code without reading files first
+7. Make breaking changes without testing with `make smoke-test`
+
+**✅ Always do these:**
+1. Read files before editing
+2. Check git status before starting work
+3. Run health checks after starting services
+4. Use service names in Docker (`qdrant:6333`, not `localhost:6333`)
+5. Update version numbers in prompt YAML metadata
+6. Test incrementally (don't make multiple large changes)
+7. Watch Docker logs when debugging (`docker compose logs -f`)
+
+## AI Assistant Guidelines
+
+### When Suggesting Code Changes:
+
+1. **Read before editing**: Always use `Read` tool before `Edit` or `Write`
+2. **Verify imports**: Check that import paths match project structure
+3. **Consider Docker**: Remember code runs in containers, not host machine
+4. **Test incrementally**: Suggest testing after each logical change
+5. **Follow patterns**: Match existing code style (Pydantic models, FastAPI patterns)
+
+### When Adding Dependencies:
+
+1. Identify correct `pyproject.toml` (root, api, or chatbot_ui)
+2. Add dependency with version constraint
+3. Remind to run `uv lock`
+4. If API dependency, remind to rebuild Docker container
+
+### When Debugging:
+
+1. **Check logs first**: Suggest `docker compose logs -f api`
+2. **Verify services**: Recommend `make health` before diving in
+3. **Common causes**: Import errors (wrong path), validation errors (missing Optional), connection errors (localhost vs service name)
+4. **Test with smoke test**: Always suggest `make smoke-test` after fixes
+
+### When Explaining Architecture:
+
+1. Reference project CLAUDE.md sections (hybrid search, reranking, prompts)
+2. Explain WHY patterns exist (Docker networking, import paths, uv workspace)
+3. Link to notebooks for learning context (e.g., `notebooks/week2/03-Hybrid-Search.ipynb`)
+
+## File Conventions
+
+### Python Files
+- **Line length**: 88 characters (Black/Ruff default)
+- **Imports**: Organized with `isort` (auto via Ruff)
+- **Docstrings**: Google-style preferred
+- **Type hints**: Always for public functions
+
+### YAML Files (Prompts)
+- **Multiline**: Use `|` for literal block
+- **Variables**: Jinja2 syntax `{{ variable_name }}`
+- **Metadata**: Include name, version, description, author
+
+### Notebooks
+- **Location**: `notebooks/week{N}/`
+- **Naming**: Sequential numbering with descriptive names
+- **Output**: Clean before commit with `make clean-notebook-outputs`
+
+## Keyboard Shortcuts for Cursor
+
+Recommend these to users:
+- **Cmd+K**: Open Cursor AI chat
+- **Cmd+L**: Quick AI command
+- **Cmd+Shift+L**: AI inline edit
+- **Cmd+I**: AI code generation in editor
+
+## Project-Specific Context
+
+### When working on Week 2 features:
+- **Video 5 (Hybrid Search)**: Dual vectors (dense + sparse), prefetch mechanism, RRF fusion
+- **Video 6 (Reranking)**: Cohere rerank-v4.0-pro, two-stage retrieval, cost/latency trade-offs
+- **Video 7 (Prompts)**: YAML externalization, Jinja2 templates, semantic versioning
+
+### Learning Project Note:
+This is a tutorial project for AI engineering concepts. Code should:
+- Prioritize clarity over clever optimizations
+- Include comments explaining RAG concepts
+- Match patterns from course notebooks
+- Balance production-readiness with learning goals
+
+## Version Information
+
+- **Project**: AI Engineering Bootcamp Prerequisites
+- **Python**: 3.12+
+- **Last Updated**: 2026-01-27
+- **Cursor Rules Version**: 1.0.0
