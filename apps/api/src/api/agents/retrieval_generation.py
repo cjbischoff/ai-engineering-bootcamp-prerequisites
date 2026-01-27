@@ -43,6 +43,8 @@ from qdrant_client.models import (
     Prefetch,
 )
 
+from api.agents.utils.prompt_management import prompt_template_config
+
 # Define nested Pydantic models for grounded structured outputs
 
 
@@ -312,66 +314,12 @@ def process_context(context):
     name="Build Prompt", run_type="prompt"
 )  # LangSmith categorizes as prompt construction
 def build_prompt(preprocessed_context, question):
-    """
-    Construct the final prompt sent to the language model.
-
-    This implements prompt engineering for the RAG system. The prompt structure:
-    1. System role: You are a shopping assistant
-    2. Task: Answer questions about products
-    3. Context: Retrieved product information
-    4. Constraint: Only use provided context
-    5. Question: User's actual query
-
-    Args:
-        preprocessed_context (str): Formatted string of retrieved products
-        question (str): User's original question
-
-    Returns:
-        str: Complete prompt with system instructions, context, and question
-
-    Why this structure:
-        - Clear role definition improves response quality
-        - "Only use provided context" prevents hallucination
-        - "Refer to available products" makes responses more natural
-        - Separating Context and Question helps LLM focus on both parts
-
-    Prompt engineering best practices applied:
-        - Explicit instructions reduce ambiguity
-        - Examples could be added for few-shot learning
-        - Triple-quoted string preserves formatting
-
-    Observability (Video 5):
-        The @traceable decorator captures:
-        - Input: formatted context and user question
-        - Output: complete prompt string sent to LLM
-        - Critical for debugging: Can see exact prompt in LangSmith UI
-        - Enables prompt iteration: Test different instructions/formats
-        - Can analyze: "Is the prompt structure causing poor answers?"
-    """
-    prompt = f"""
-You are a shopping assistant that can answer questions about the products in stock.
-
-You will be given a question and a list of context.
-
-Instructions:
-- You need to answer the question based on the provided context only.
-- Never use word context and refer to it as the available products.
-- As an output you need to provide:
-
-* The answer to the question based on the provided context.
-* The list of the IDs of the chunks that were used to answer the question. Only return the ones that are used in the answer.
-* Short description (1-2 sentences) of the item based on the description provided in the context.
-
-- The short description should have the name of the item.
-- The answer to the question should contain detailed information about the product and returned with detailed specification in bullet points.
-
-
-Context:
-{preprocessed_context}
-
-Question:
-{question}
-"""
+    template = prompt_template_config(
+        "apps/api/src/api/agents/prompts/retrieval_generation.yaml", "retrieval_generation"
+    )
+    prompt = template.render(
+        preprocessed_context=preprocessed_context, question=question
+    )
 
     return prompt
 
