@@ -24,6 +24,7 @@ members = [
 
 [dependency-groups]
 dev = [
+    "cohere>=5.20.2",
     "fastembed>=0.7.4",
     "langgraph>=1.0.7",
     "langsmith>=0.6.4",
