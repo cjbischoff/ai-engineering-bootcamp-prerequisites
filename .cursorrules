@@ -387,9 +387,9 @@ make health              # Terminal 2: Verify infrastructure
 # 3. Test changes (hot reload should pick them up)
 make smoke-test          # Verify end-to-end functionality
 
-# 4. If tests pass, commit
+# 4. If tests pass, commit (signed)
 git add .
-git commit -m "Your descriptive commit message"
+git commit -S -m "Your descriptive commit message"
 ```
 
 ---
@@ -547,7 +547,7 @@ docker compose restart api
 - **Lifecycle**: Create from `main` → Merge to `main` → Keep permanently
 
 ### Commit Convention
-**Format**: Conventional commits (never reference Claude/Cursor)
+**Format**: Conventional commits, signed with GPG (never reference Claude/Cursor)
 ```bash
 feat(sprint2): complete video 3 - langraph implementation
 fix(sprint2): correct agent pipeline validation
@@ -562,7 +562,7 @@ test(sprint2): add unit tests for agent tools
 git checkout main && git checkout -b sprint/2
 
 # Per video (repeat 6-9 times)
-git add . && git commit -m "feat(sprint2): complete video N - description"
+git add . && git commit -S -m "feat(sprint2): complete video N - description"
 git push origin sprint/2
 
 # Complete sprint
@@ -575,7 +575,7 @@ git checkout main && git pull origin main
 ### Rules
 - ✅ All work in sprint branches (including hotfixes)
 - ✅ Push after each video commit (backup protection)
-- ✅ Use conventional commit format
+- ✅ Use conventional commit format with signing (`-S` flag)
 - ✅ Merge via GitHub CLI PR (CodeRabbit reviews)
 - ✅ Sprint branches stay in GitHub permanently
 - ❌ Never commit directly to `main`

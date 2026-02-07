@@ -103,7 +103,7 @@ This project follows a **sprint-based branching strategy** for bootcamp capstone
 
 ### Commit Message Convention
 
-**Format:** Conventional Commits (never reference Claude/Cursor)
+**Format:** Conventional Commits, signed with GPG using `-S` flag (never reference Claude/Cursor)
 
 **Video completion commits:**
 ```bash
@@ -152,8 +152,8 @@ git checkout -b sprint/2
 # 2. Stage changes
 git add .
 
-# 3. Commit with conventional format
-git commit -m "feat(sprint2): complete video 3 - langraph implementation"
+# 3. Commit with conventional format (signed with -S)
+git commit -S -m "feat(sprint2): complete video 3 - langraph implementation"
 
 # 4. Push to GitHub (backup + visibility)
 git push origin sprint/2
@@ -194,7 +194,7 @@ git pull origin main
 **✅ DO:**
 - Create all sprint branches from `main`
 - Push after each video commit (backup protection)
-- Use conventional commit format
+- Use conventional commit format with signing (`-S` flag)
 - Include hotfixes in sprint branch (document in commit message)
 - Keep sprint branches in GitHub permanently
 - Merge only via Pull Request
@@ -387,8 +387,8 @@ vim apps/api/src/api/agents/prompts/retrieval_generation.yaml
 # 3. Test changes
 make smoke-test
 
-# 4. Commit with descriptive message
-git commit -m "feat(prompts): add rating emphasis to RAG prompt (v1.1.0)"
+# 4. Commit with descriptive message (signed)
+git commit -S -m "feat(prompts): add rating emphasis to RAG prompt (v1.1.0)"
 
 # 5. FastAPI hot reload picks up changes automatically
 ```
@@ -579,9 +579,9 @@ make health              # Terminal 2: Verify infrastructure
 # 3. Test changes (hot reload should pick them up)
 make smoke-test          # Verify end-to-end functionality
 
-# 4. If tests pass, commit
+# 4. If tests pass, commit (signed)
 git add .
-git commit -m "Your descriptive commit message"
+git commit -S -m "Your descriptive commit message"
 ```
 
 #### Script Implementation Details
@@ -1657,11 +1657,11 @@ metadata:
 make smoke-test  # Validates end-to-end RAG pipeline
 ```
 
-**4. Commit with Descriptive Message:**
+**4. Commit with Descriptive Message (signed):**
 ```bash
-git commit -m "feat(prompts): add product rating emphasis to RAG prompt (v1.1.0)"
+git commit -S -m "feat(prompts): add product rating emphasis to RAG prompt (v1.1.0)"
 # or
-git commit -m "fix(prompts): correct typo in system instructions (v1.0.1)"
+git commit -S -m "fix(prompts): correct typo in system instructions (v1.0.1)"
 ```
 
 **5. Deploy:**
