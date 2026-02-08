@@ -15,9 +15,16 @@ This directory stores externalized prompt templates introduced in Week 2 / Video
 
 ```
 apps/api/src/api/agents/prompts/
-├── retrieval_generation.yaml      # RAG prompt with structured output
-└── README.md                      # This file
+├── retrieval_generation.yaml      # RAG prompt (original pipeline)
+├── qa_agent.yaml                 # ReAct agent prompt (Sprint 2)
+├── intent_router_agent.yaml      # Intent router prompt (Sprint 2)
+└── README.md                     # This file
 ```
+
+### Sprint 2 Additions
+
+- **qa_agent.yaml**: Instructions for the ReAct agent (tool-calling format, available_tools, final_answer rules).
+- **intent_router_agent.yaml**: Intent classification (question_relevant true/false).
 
 ## File Structure: retrieval_generation.yaml
 

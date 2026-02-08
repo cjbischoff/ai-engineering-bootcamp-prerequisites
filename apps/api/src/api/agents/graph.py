@@ -1,4 +1,13 @@
+"""
+LangGraph ReAct agent workflow (Sprint 2 / Video 5-6).
 
+Defines StateGraph: START -> intent_router -> agent_node <-> tool_node -> END.
+- intent_router: Filters irrelevant queries.
+- agent_node: LLM that decides tool_calls or final_answer.
+- tool_node: Executes get_formatted_context (retrieval tool).
+- tool_router: Conditional edge agent_node -> tools or end.
+run_agent() invokes the graph; rag_agent_wrapper() enriches result with images/prices.
+"""
 from qdrant_client import QdrantClient
 from pydantic import BaseModel
 import numpy as np
@@ -15,6 +24,7 @@ from langgraph.graph import END, START
 from langgraph.prebuilt import ToolNode
 
 
+# --- State: shared across all nodes; add reducer appends messages and references ---
 class State(BaseModel):
     messages: Annotated[List[Any], add] = []
     question_relevant: bool = False
@@ -26,7 +36,7 @@ class State(BaseModel):
     references: Annotated[List[RAGUsedContext], add] = []
 
 def tool_router(state: State) -> str:
-    """Decide whether to continue or end"""
+    """Conditional edge from agent_node: "tools" -> tool_node, "end" -> END."""
     if state.final_answer:
         return "end"
     elif state.iteration > 2:
@@ -37,11 +47,13 @@ def tool_router(state: State) -> str:
         return "end"
 
 def intent_router_conditional_edges(state: State) -> str:
+    """Routes from intent_router: agent_node if relevant, END otherwise."""
     if state.question_relevant:
         return "agent_node"
     else:
         return "end"
 
+# --- Build graph: nodes + edges (Video 5 pattern) ---
 workflow = StateGraph(State)
 
 tools = [get_formatted_context]
@@ -77,8 +89,7 @@ workflow.add_edge("tool_node", "agent_node")
 graph = workflow.compile()
 
 
-# Agent Execution
-
+# --- Execution: run_agent invokes graph; rag_agent_wrapper enriches for frontend ---
 def run_agent(question: str) -> dict:
     initial_state = {
         "messages": [{"role": "user", "content": question}],
@@ -93,12 +104,16 @@ def run_agent(question: str) -> dict:
 
 
 def rag_agent_wrapper(question):
-
+    """
+    Entry point for /rag/ endpoint. Runs agent, then enriches references with
+    image_url and price from Qdrant (same pattern as rag_pipeline_wrapper).
+    """
     qdrant_client = QdrantClient(url="http://qdrant:6333")
 
     result = run_agent(question)
 
     used_context = []
+    # Dummy vector for filter-only query (we only need payload by parent_asin)
     dummy_vector = np.zeros(1536).tolist()
 
     for item in result.get("references", []):

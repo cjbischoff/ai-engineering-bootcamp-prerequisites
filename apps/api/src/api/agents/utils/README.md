@@ -11,8 +11,14 @@ This directory contains helper functions for prompt configuration management int
 ```
 apps/api/src/api/agents/utils/
 ├── __init__.py                    # Makes directory a Python package
-└── prompt_management.py           # Prompt loading utilities
+├── prompt_management.py           # Prompt loading utilities (Video 7)
+└── utils.py                       # Agent utilities (Sprint 2)
 ```
+
+### utils.py (Sprint 2 / Video 5)
+
+- **format_ai_message(response)**: Converts AgentResponse to AIMessage. Includes tool_calls when the agent wants to invoke tools. Required by LangGraph.
+- **get_tool_descriptions(function_list)**: Parses function docstrings into tool schemas (name, description, parameters). Used as `available_tools` for the agent.
 
 ## Functions
 

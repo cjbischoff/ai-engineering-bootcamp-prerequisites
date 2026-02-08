@@ -1,4 +1,10 @@
-# File: apps/api/src/api/agents/tools.py
+"""
+Retrieval tool for ReAct agent (Sprint 2 / Video 5-6).
+
+get_formatted_context is the tool the agent calls to retrieve product data.
+Hides vector search behind tool use: agent decides when/what to retrieve.
+Uses hybrid search (dense + BM25, RRF fusion) - same as retrieval_generation.
+"""
 import openai
 from langsmith import traceable, get_current_run_tree
 from qdrant_client import QdrantClient
@@ -23,10 +29,9 @@ def get_embedding(text, model="text-embedding-3-small"):
     name="retrieve_data",
     run_type="retriever"
 )
-def retrieve_data(query, qdrant_client, k=5):
-
+def retrieve_data(query, k=5):
+    """Retrieve top-k products via hybrid search. Creates Qdrant client internally."""
     query_embedding = get_embedding(query)
-
     qdrant_client = QdrantClient(url="http://qdrant:6333")
 
     # Qdrant query (hybrid search with RRF fusion)
@@ -81,7 +86,9 @@ def process_context(context):
         formatted_context += f"- ID: {id}, rating: {rating}, description: {chunk}\n"
     return formatted_context
 def get_formatted_context(query: str, top_k: int = 5) -> str:
-    """Get the top k context, each representing an inventory item for a given query.
+    """
+    Tool invoked by agent when it needs product context. Returns formatted string
+    of top-k products (ID, rating, description). Agent uses this to answer questions.
 
     Args:
         query: The query to get the top k context for
@@ -90,6 +97,6 @@ def get_formatted_context(query: str, top_k: int = 5) -> str:
     Returns:
         A string of the top k context chunks with IDs and average ratings prepending each chunk, each representing an inventory item for a given query.
     """
-    context = retrieve_data(query, top_k)
+    context = retrieve_data(query, k=top_k)
     formatted_context = process_context(context)
     return formatted_context

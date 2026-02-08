@@ -1,3 +1,4 @@
+"""Agent utils: format_ai_message, get_tool_descriptions. Sprint 2 / Video 5."""
 import ast
 import inspect
 from typing import Any, Dict
@@ -6,7 +7,7 @@ from langchain_core.messages import AIMessage
 
 
 def format_ai_message(response):
-
+    """Convert AgentResponse to AIMessage. Includes tool_calls when agent wants to invoke tools."""
     if response.tool_calls:
         tool_calls = []
         for i, tc in enumerate(response.tool_calls):
@@ -28,7 +29,7 @@ def format_ai_message(response):
     return ai_message
 
 
-# #### TOOL DESCRIPTION PARSING ####
+# --- Tool schema extraction: parse docstrings for agent's available_tools ---
 
 def parse_function_definition(function_def: str) -> Dict[str, Any]:
     """Parse a function definition string to extract metadata including type hints."""
@@ -149,7 +150,7 @@ def parse_docstring_params(docstring: str) -> Dict[str, str]:
 
 
 def get_tool_descriptions(function_list):
-    """Extract tool descriptions from the function list"""
+    """Extract tool schemas (name, description, parameters) from functions. Used as available_tools for agent."""
     descriptions = []
 
     for function in function_list:

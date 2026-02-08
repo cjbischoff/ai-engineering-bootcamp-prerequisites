@@ -90,9 +90,9 @@ def rag(request: Request, payload: RAGRequest) -> RAGResponse:
         - Add timeout to prevent long-running queries
         - Validate query length and content (prevent injection)
     """
-    # Run the complete RAG pipeline with enrichment: retrieve context, generate answer, and fetch metadata
-    # Changed in Video 3: Now uses rag_pipeline_wrapper instead of rag_pipeline
-    # This wrapper adds product images and prices from Qdrant for rich frontend display
+    # Sprint 2 / Video 6: ReAct agent replaces rag_pipeline_wrapper. Agent uses tools
+    # (get_formatted_context) to retrieve; rag_agent_wrapper enriches references with
+    # image_url and price from Qdrant (same response shape for frontend compatibility).
     answer = rag_agent_wrapper(payload.query)
 
     # Return structured response with request ID for tracing and enriched product context
