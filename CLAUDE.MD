@@ -239,14 +239,14 @@ gh pr status
 # 3. View CodeRabbit feedback
 gh pr view sprint/2
 
-# 4. After approval, merge via CLI
+# 4. After approval, merge via CLI (does NOT delete branch)
 gh pr merge sprint/2 --merge
 
 # 5. Update local main
 git checkout main
 git pull origin main
 
-# sprint/2 branch stays in GitHub permanently for review
+# CRITICAL: DO NOT delete the sprint branch. Sprint branches stay in GitHub permanently.
 ```
 
 ---

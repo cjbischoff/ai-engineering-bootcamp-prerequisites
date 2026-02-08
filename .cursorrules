@@ -610,6 +610,7 @@ gh pr view sprint/2
 gh pr merge sprint/2 --merge
 git checkout main && git pull origin main
 ```
+**CRITICAL:** Do NOT delete the sprint branch after merge. Sprint branches stay in GitHub permanently.
 
 ### Rules
 - ✅ All work in sprint branches (including hotfixes)
@@ -635,8 +636,9 @@ gh pr status              # Check PR status
 gh pr view sprint/2       # View specific PR
 gh pr list                # List all PRs
 gh pr checks sprint/2     # View CI/review checks
-gh pr merge sprint/2 --merge  # After approval, run Merge Steps
+gh pr merge sprint/2 --merge  # After approval; does NOT delete branch
 ```
+**Merge workflow:** Merge into main and DO NOT delete the sprint branch. Sprint branches are kept permanently.
 
 ---
 
