@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "api",
     "google-genai>=1.57.0",
     "groq>=1.0.0",
     "ipykernel>=7.1.0",
@@ -15,6 +16,9 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "streamlit>=1.52.2",
 ]
+
+[tool.uv.sources]
+api = { workspace = true }
 
 [tool.uv.workspace]
 members = [

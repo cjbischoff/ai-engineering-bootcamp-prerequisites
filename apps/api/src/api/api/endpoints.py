@@ -18,7 +18,7 @@ import logging
 
 from fastapi import APIRouter, Request
 
-from api.agents.retrieval_generation import rag_pipeline_wrapper
+from api.agents.graph import rag_agent_wrapper
 from api.api.models import RAGRequest, RAGResponse, RAGUsedContext
 
 # Configure logging to track API requests and errors
@@ -93,7 +93,7 @@ def rag(request: Request, payload: RAGRequest) -> RAGResponse:
     # Run the complete RAG pipeline with enrichment: retrieve context, generate answer, and fetch metadata
     # Changed in Video 3: Now uses rag_pipeline_wrapper instead of rag_pipeline
     # This wrapper adds product images and prices from Qdrant for rich frontend display
-    answer = rag_pipeline_wrapper(payload.query)
+    answer = rag_agent_wrapper(payload.query)
 
     # Return structured response with request ID for tracing and enriched product context
     # request.state.request_id was set by RequestIDMiddleware
