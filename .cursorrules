@@ -626,8 +626,8 @@ git checkout main && git pull origin main
 - ❌ Never merge without PR review
 
 ### Current Sprint
-**Sprint 2: Agents & Agentic Systems**
-- Branch: `sprint/2`
+**Sprint 3: Moving From Basic To Agentic RAG**
+- Branch: `sprint/3`
 - Status: In progress
 
 ### GitHub CLI Commands (Merge Plan)

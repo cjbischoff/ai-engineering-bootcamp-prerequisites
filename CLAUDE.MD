@@ -274,9 +274,8 @@ git pull origin main
 
 ### Current Sprint
 
-**Sprint 2: Agents & Agentic Systems**
-- Branch: `sprint/2`
-- Videos: Agent basics through multi-agent orchestration
+**Sprint 3: Moving From Basic To Agentic RAG**
+- Branch: `sprint/3`
 - Status: In progress
 
 ---
