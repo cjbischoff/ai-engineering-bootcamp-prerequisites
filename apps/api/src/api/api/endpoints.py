@@ -16,9 +16,9 @@ and future extensibility (e.g., adding /rag/health, /rag/feedback endpoints).
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from api.agents.retrieval_generation import rag_pipeline_wrapper
+from api.agents.graph import rag_agent_wrapper
 from api.api.models import RAGRequest, RAGResponse, RAGUsedContext
 
 # Configure logging to track API requests and errors
@@ -84,16 +84,23 @@ def rag(request: Request, payload: RAGRequest) -> RAGResponse:
         - Added to response headers (X-Request-ID) by middleware
 
     Production improvements needed:
-        - Add error handling (try/except) for rag_pipeline failures
+        - Add rate limiting to prevent abuse
         - Add rate limiting to prevent abuse
         - Add request/response logging for analytics
         - Add timeout to prevent long-running queries
         - Validate query length and content (prevent injection)
     """
-    # Run the complete RAG pipeline with enrichment: retrieve context, generate answer, and fetch metadata
-    # Changed in Video 3: Now uses rag_pipeline_wrapper instead of rag_pipeline
-    # This wrapper adds product images and prices from Qdrant for rich frontend display
-    answer = rag_pipeline_wrapper(payload.query)
+    # Sprint 2 / Video 6: ReAct agent replaces rag_pipeline_wrapper. Agent uses tools
+    # (get_formatted_context) to retrieve; rag_agent_wrapper enriches references with
+    # image_url and price from Qdrant (same response shape for frontend compatibility).
+    try:
+        answer = rag_agent_wrapper(payload.query)
+    except Exception as e:
+        logger.exception("RAG agent failed: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail="RAG pipeline failed. Please try again.",
+        ) from e
 
     # Return structured response with request ID for tracing and enriched product context
     # request.state.request_id was set by RequestIDMiddleware

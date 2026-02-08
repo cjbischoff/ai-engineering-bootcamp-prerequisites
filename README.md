@@ -9,7 +9,8 @@ This repository contains prerequisite materials and a complete AI chatbot applic
 - **Vector Database**: Qdrant for semantic search and RAG operations
 - **Docker Support**: Containerized deployment with Docker Compose
 - **Workspace Architecture**: Modular monorepo structure with `uv` package manager
-- **Jupyter Notebooks**: Interactive tutorials for LLM APIs, dataset exploration, and RAG preprocessing
+- **Jupyter Notebooks**: Interactive tutorials for LLM APIs, dataset exploration, RAG preprocessing, and LangGraph agents
+- **ReAct Agent**: LangGraph-based agent with retrieval tool, intent routing (Sprint 2)
 
 ## Prerequisites
 
@@ -219,11 +220,13 @@ make smoke-test-verbose
 ├── notebooks/
 │   ├── week0/
 │   │   └── 01-llm-apis.ipynb       # LLM API tutorials
-│   └── week1/
-│       ├── 01-explore-amazon-dataset.ipynb  # Dataset exploration
-│       ├── 02-RAG-preprocessing-Amazon.ipynb # RAG preprocessing & embeddings
-│       ├── 03-RAG-pipeline.ipynb            # RAG pipeline implementation
-│       └── 04-evaluation-dataset.ipynb      # Evaluation dataset creation
+│   ├── week1/
+│   │   ├── 01-explore-amazon-dataset.ipynb  # Dataset exploration
+│   │   ├── 02-RAG-preprocessing-Amazon.ipynb # RAG preprocessing
+│   │   ├── 03-RAG-pipeline.ipynb            # RAG pipeline implementation
+│   │   └── 04-evaluation-dataset.ipynb      # Evaluation dataset creation
+│   ├── week2/                       # Advanced RAG (hybrid, rerank, prompts)
+│   └── week3/                       # LangGraph, ReAct agent
 │
 ├── qdrant_storage/                 # Qdrant persistent storage (gitignored)
 ├── docker-compose.yml              # Multi-service orchestration
@@ -3267,6 +3270,45 @@ prompts:
 - `pyyaml`: https://pyyaml.org/
 - `jinja2`: https://jinja.palletsprojects.com/
 - `langsmith`: https://github.com/langchain-ai/langsmith-sdk
+
+## Week 3: LangGraph & ReAct Agents
+
+Sprint 2 introduces LangGraph for agentic workflows: query expansion, routing, and a ReAct agent that hides retrieval behind a tool.
+
+**Notebooks:** See [notebooks/week3/README.md](notebooks/week3/README.md) for the full learning path.
+
+### Sprint 2 / Video 1–2: LangGraph Introduction
+
+**Notebook:** `notebooks/week3/01-LangGraph-Intro.ipynb`
+
+- StateGraph basics (nodes, edges, state)
+- Tool-using agents (ReAct pattern)
+- ToolNode, tool descriptions
+
+### Sprint 2 / Video 3–4: Query Expansion & Routing
+
+**Notebooks:** `02-Query-Rewriting.ipynb`, `03-Router.ipynb`
+
+- Query expansion for better retrieval (not moved to backend)
+- Intent router: filter irrelevant queries before agent
+- Conditional edges
+
+### Sprint 2 / Video 5–6: ReAct Agent Backend
+
+**Notebook:** `04-Agent-Single-Turn.ipynb` · **Backend:** `apps/api/src/api/agents/`
+
+The `/rag/` endpoint uses a **LangGraph ReAct agent** instead of the linear RAG pipeline:
+
+```
+START → intent_router_node → agent_node ⇄ tool_node → END
+```
+
+- **get_formatted_context**: Retrieval tool (hides vector search behind tool use)
+- **agent_node**: LLM decides tool_calls or final_answer
+- **intent_router_node**: Filters off-topic queries
+- **rag_agent_wrapper**: Enriches references with images/prices (same response shape as before)
+
+**Architecture:** See [apps/api/src/api/agents/README.md](apps/api/src/api/agents/README.md)
 
 ## API Endpoints
 

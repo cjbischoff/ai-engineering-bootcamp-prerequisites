@@ -11,13 +11,34 @@ This directory contains the production implementation of the RAG pipeline - a 5-
 ```
 apps/api/src/api/agents/
 ├── __init__.py
-├── retrieval_generation.py      # Complete RAG pipeline (500+ lines)
+├── agents.py                    # ReAct agent_node, intent_router_node (Sprint 2)
+├── graph.py                     # StateGraph, run_agent, rag_agent_wrapper
+├── tools.py                     # get_formatted_context retrieval tool
+├── retrieval_generation.py      # Original RAG pipeline (still used by evals)
 ├── utils/
 │   ├── __init__.py
-│   └── prompt_management.py     # Prompt loading utilities (Video 7)
+│   ├── prompt_management.py     # Prompt loading utilities (Video 7)
+│   └── utils.py                 # format_ai_message, get_tool_descriptions
 └── prompts/
-    └── retrieval_generation.yaml  # RAG prompt configuration (Video 7)
+    ├── retrieval_generation.yaml  # RAG prompt (original pipeline)
+    ├── qa_agent.yaml             # ReAct agent prompt
+    └── intent_router_agent.yaml  # Intent router prompt
 ```
+
+## ReAct Agent (Sprint 2 / Video 5–6)
+
+The `/rag/` endpoint uses a **LangGraph ReAct agent** instead of the linear RAG pipeline:
+
+```
+START → intent_router_node → agent_node ⇄ tool_node → END
+```
+
+- **intent_router_node**: Filters irrelevant queries (<Question> not about products).
+- **agent_node**: LLM decides tool_calls or final_answer.
+- **tool_node**: Executes `get_formatted_context` (retrieval tool).
+- **tool_router**: Conditional edge: tools → tool_node, end → END.
+
+**Why hide retrieval behind a tool?** The agent can decide when to retrieve, handle multi-step queries, and avoid retrieval for off-topic questions.
 
 ## RAG Pipeline Workflow
 

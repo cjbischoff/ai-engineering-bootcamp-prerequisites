@@ -1,0 +1,60 @@
+# CodeRabbit configuration for AI Engineering Bootcamp Prerequisites
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: "en-US"
+
+# Tone: concise, constructive feedback aligned with bootcamp learning goals
+tone_instructions: "Provide concise, constructive code review feedback. Focus on correctness, maintainability, and patterns relevant to RAG/AI engineering. Be direct but supportive—this is a learning project."
+
+early_access: true
+
+reviews:
+  profile: assertive
+  review_details: true
+  in_progress_fortune: false
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: true
+    base_branches:
+      - .*
+  path_filters:
+    - "apps/**"
+    - "scripts/**"
+    - "notebooks/**"
+  path_instructions:
+    - path: "apps/api/**/*.py"
+      instructions: |
+        This is FastAPI backend code. Check: use uv not pip; imports use api.X not apps.api.src.api.X;
+        Pydantic models use Optional for nullable fields; Docker networking uses service names (qdrant:6333) not localhost.
+    - path: "apps/api/**/*.yaml"
+      instructions: |
+        YAML prompt configs. Use Jinja2 {{ variable }} syntax; preserve metadata (version, author);
+        multiline strings use | for literal blocks.
+    - path: "notebooks/**/*.ipynb"
+      instructions: |
+        Learning notebooks. Code quality matters but prioritize clarity for tutorials.
+        Ensure outputs are cleaned before commit (make clean-notebook-outputs).
+
+tools:
+  ruff:
+    enabled: true
+  yamllint:
+    enabled: true
+  gitleaks:
+    enabled: true
+  hadolint:
+    enabled: true
+
+pre_merge_checks:
+  title:
+    mode: warning
+    requirements: "Use conventional commits: feat(sprint2):, fix(sprint2):, docs(sprint2):, etc."
+
+chat:
+  art: false
+  auto_reply: true
+
+issue_enrichment:
+  auto_enrich:
+    enabled: true
