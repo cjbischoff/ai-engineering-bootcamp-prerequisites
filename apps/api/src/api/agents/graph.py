@@ -9,31 +9,33 @@ Defines StateGraph: START -> intent_router -> agent_node <-> tool_node -> END.
 run_agent() invokes the graph; rag_agent_wrapper() enriches result with images/prices.
 """
 from qdrant_client import QdrantClient
+
+# Reuse client across requests (avoids per-request connection overhead)
+_QDRANT_CLIENT = QdrantClient(url="http://qdrant:6333")
 from pydantic import BaseModel
 import numpy as np
 from qdrant_client.models import Filter, FieldCondition, MatchValue
-from typing import Annotated, List, Any, Dict
+from typing import Annotated, Any
+
 from operator import add
 from api.agents.agents import ToolCall, RAGUsedContext, agent_node, intent_router_node
 from langgraph.graph import StateGraph
-from api.agents.retrieval_generation import rag_pipeline
 from api.agents.tools import get_formatted_context
 from api.agents.utils.utils import get_tool_descriptions
-from api.agents.agents import agent_node, intent_router_node
 from langgraph.graph import END, START
 from langgraph.prebuilt import ToolNode
 
 
 # --- State: shared across all nodes; add reducer appends messages and references ---
 class State(BaseModel):
-    messages: Annotated[List[Any], add] = []
+    messages: Annotated[list[Any], add] = []
     question_relevant: bool = False
     iteration: int = 0
     answer: str = ""
-    available_tools: List[Dict[str, Any]] = []
-    tool_calls: List[ToolCall] = []
+    available_tools: list[dict[str, Any]] = []
+    tool_calls: list[ToolCall] = []
     final_answer: bool = False
-    references: Annotated[List[RAGUsedContext], add] = []
+    references: Annotated[list[RAGUsedContext], add] = []
 
 def tool_router(state: State) -> str:
     """Conditional edge from agent_node: "tools" -> tool_node, "end" -> END."""
@@ -108,8 +110,6 @@ def rag_agent_wrapper(question):
     Entry point for /rag/ endpoint. Runs agent, then enriches references with
     image_url and price from Qdrant (same pattern as rag_pipeline_wrapper).
     """
-    qdrant_client = QdrantClient(url="http://qdrant:6333")
-
     result = run_agent(question)
 
     used_context = []
@@ -117,7 +117,7 @@ def rag_agent_wrapper(question):
     dummy_vector = np.zeros(1536).tolist()
 
     for item in result.get("references", []):
-        payload = qdrant_client.query_points(
+        points_result = _QDRANT_CLIENT.query_points(
             collection_name="Amazon-items-collection-01-hybrid-search",
             query=dummy_vector,
             limit=1,
@@ -131,7 +131,10 @@ def rag_agent_wrapper(question):
                     )
                 ]
             )
-        ).points[0].payload
+        )
+        if not points_result.points:
+            continue
+        payload = points_result.points[0].payload
 
         image_url = payload.get("image")
         price = payload.get("price")

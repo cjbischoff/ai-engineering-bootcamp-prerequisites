@@ -2,7 +2,7 @@ metadata:
   name: Amazon Items QnA Agent Prompt
   version: 1.0.0
   description: QnA Agent Prompt for Amazon Items RAG Pipeline
-  author: Christoper Bischoff
+  author: Christopher Bischoff
 
 prompts:
   qa_agent: |
@@ -19,7 +19,7 @@ prompts:
         "name": "tool_name",
         "arguments": {
             "parameter1": "value1",
-            "parameter2": "value2",
+            "parameter2": "value2"
         }
     }
 

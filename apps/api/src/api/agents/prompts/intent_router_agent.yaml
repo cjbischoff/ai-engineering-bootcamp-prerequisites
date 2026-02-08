@@ -2,7 +2,7 @@ metadata:
   name: Amazon Items Intent Router Prompt
   version: 1.0.0
   description: Intent Prompt for RAG Pipeline
-  author: Christoper Bischoff
+  author: Christopher Bischoff
 
 prompts:
   intent_router_agent: |

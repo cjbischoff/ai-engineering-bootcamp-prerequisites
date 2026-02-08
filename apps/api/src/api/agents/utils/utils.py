@@ -1,7 +1,7 @@
 """Agent utils: format_ai_message, get_tool_descriptions. Sprint 2 / Video 5."""
 import ast
 import inspect
-from typing import Any, Dict
+from typing import Any
 
 from langchain_core.messages import AIMessage
 
@@ -31,7 +31,7 @@ def format_ai_message(response):
 
 # --- Tool schema extraction: parse docstrings for agent's available_tools ---
 
-def parse_function_definition(function_def: str) -> Dict[str, Any]:
+def parse_function_definition(function_def: str) -> dict[str, Any]:
     """Parse a function definition string to extract metadata including type hints."""
     result = {
         "name": "",
@@ -42,7 +42,10 @@ def parse_function_definition(function_def: str) -> Dict[str, Any]:
     }
 
     # Parse the function using AST
-    tree = ast.parse(function_def.strip())
+    try:
+        tree = ast.parse(function_def.strip())
+    except SyntaxError:
+        return result
     if not tree.body or not isinstance(tree.body[0], ast.FunctionDef):
         return result
 
@@ -83,7 +86,10 @@ def parse_function_definition(function_def: str) -> Dict[str, Any]:
         # Check for default value
         default_idx = i - (num_args - num_defaults)
         if default_idx >= 0:
-            param_info["default"] = ast.literal_eval(ast.unparse(defaults[default_idx]))
+            try:
+                param_info["default"] = ast.literal_eval(ast.unparse(defaults[default_idx]))
+            except (ValueError, TypeError):
+                pass
         else:
             result["required"].append(arg.arg)
 
@@ -119,7 +125,7 @@ def get_type_from_annotation(annotation) -> str:
     return "string"
 
 
-def parse_docstring_params(docstring: str) -> Dict[str, str]:
+def parse_docstring_params(docstring: str) -> dict[str, str]:
     """Extract parameter descriptions from docstring (handles both Args: and Parameters: formats)."""
     params = {}
     lines = docstring.split('\n')
@@ -160,4 +166,4 @@ def get_tool_descriptions(function_list):
         if result:
             descriptions.append(result)
 
-    return descriptions if descriptions else "Could not extract tool descriptions"
+    return descriptions if descriptions else []

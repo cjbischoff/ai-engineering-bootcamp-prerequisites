@@ -17,10 +17,20 @@ from openai import OpenAI
 from api.agents.utils.prompt_management import prompt_template_config
 from api.agents.utils.utils import format_ai_message
 from pydantic import BaseModel, Field
-from typing import List
 
 # Path to prompts dir; uses __file__ so it works in both local and Docker (Video 6 fix)
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+
+# Lazy-initialized instructor client (defers API key check to first request)
+_instructor_client = None
+
+
+def _get_instructor_client():
+    """Reuse instructor client across requests (avoids per-call instantiation)."""
+    global _instructor_client
+    if _instructor_client is None:
+        _instructor_client = instructor.from_openai(OpenAI())
+    return _instructor_client
 
 
 # --- Pydantic models for structured LLM outputs (Instructor enforces these schemas) ---
@@ -42,9 +52,9 @@ class AgentResponse(BaseModel):
     - references: Product IDs used in the answer (for enrichment in rag_agent_wrapper).
     """
     answer: str = ""
-    tool_calls: List[ToolCall] = []
+    tool_calls: list[ToolCall] = []
     final_answer: bool = False
-    references: List[RAGUsedContext] = []
+    references: list[RAGUsedContext] = []
 
 
 class IntentRouterResponse(BaseModel):
@@ -72,8 +82,7 @@ def agent_node(state) -> dict:
     for message in state.messages:
         conversation.append(convert_to_openai_messages(message))
 
-    client = instructor.from_openai(OpenAI())
-    response, raw_response = client.chat.completions.create_with_completion(
+    response, _ = _get_instructor_client().chat.completions.create_with_completion(
         model="gpt-4.1-mini",
         response_model=AgentResponse,
         messages=[{"role": "system", "content": prompt}, *conversation],
@@ -116,9 +125,7 @@ def intent_router_node(state):
     )
     prompt = template.render(query=query)
 
-    client = instructor.from_openai(OpenAI())
-
-    response, raw_response = client.chat.completions.create_with_completion(
+    response, _ = _get_instructor_client().chat.completions.create_with_completion(
         model="gpt-4.1-mini",
         response_model=IntentRouterResponse,
         messages=[{"role": "system", "content": prompt}, {"role": "user", "content": query}],

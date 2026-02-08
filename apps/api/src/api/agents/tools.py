@@ -81,10 +81,13 @@ def process_context(context):
     for id, chunk, rating in zip(
         context["retrieved_context_ids"],
         context["retrieved_context"],
-        context["retrieved_context_ratings"]
+        context["retrieved_context_ratings"],
+        strict=True,
     ):
         formatted_context += f"- ID: {id}, rating: {rating}, description: {chunk}\n"
     return formatted_context
+
+
 def get_formatted_context(query: str, top_k: int = 5) -> str:
     """
     Tool invoked by agent when it needs product context. Returns formatted string
