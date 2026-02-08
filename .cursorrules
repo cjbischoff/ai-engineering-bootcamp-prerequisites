@@ -544,13 +544,13 @@ docker compose restart api
 ### Branch Structure
 - **Naming**: `sprint/1`, `sprint/2`, `sprint/3`
 - **Scope**: One sprint = All videos in that sprint
-- **Lifecycle**: Create from `main` → Merge to `main` → Keep permanently
+- **Lifecycle**: Create from `main` → Complete Merge Plan (Pre-Merge + Merge Steps) → Keep permanently
 
 ### Commit Plan (Commit Only — No Merge)
 **Rules:**
 - **Always sign commits** — Use `-S` on every `git commit`
 - **Commit all changes** — Run `git status` to find all changes (tracked + untracked), stage and commit everything
-- **Merge is separate** — Merge has its own plan; not part of commit workflow
+- **Merge is separate** — See Merge Plan (Pre-Merge Steps + Merge Steps); not part of commit workflow
 
 **Pre-commit:**
 ```bash
@@ -588,7 +588,27 @@ git add .
 git commit -S -m "feat(sprint2): complete video N - description"
 git push origin sprint/2
 
-# Merge plan is separate (see CLAUDE.MD)
+# Merge: complete Merge Plan (Pre-Merge Steps + Merge Steps) below
+```
+
+### Merge Plan
+
+**Pre-Merge Steps** (complete before creating PR):
+
+| Step | Action | Details |
+|------|--------|---------|
+| 1 | Clean notebooks | `make clean-notebook-outputs` |
+| 2 | Learning comments | Heavily comment all code files (exclude .cursorrules, CLAUDE.MD, .coderabbit.yaml). Focus on learning: concepts, why, architecture, course references. |
+| 3 | Local READMEs | Create/update README in every code/notebook folder. Each explains what was done, why, how code works, ties files together. |
+| 4 | Root README | Update root README.md — holistic super README: what was done and why, architecture overview, learning journey. Point to local READMEs (no duplication). |
+
+**Merge Steps:**
+```bash
+gh pr create --base main --head sprint/2 --title "Sprint 2: Agents & Agentic Systems" --body "Completed all videos for Sprint 2. Ready for review."
+gh pr status
+gh pr view sprint/2
+gh pr merge sprint/2 --merge
+git checkout main && git pull origin main
 ```
 
 ### Rules
@@ -597,7 +617,7 @@ git push origin sprint/2
 - ✅ **Always sign commits** (`-S` flag)
 - ✅ Commit all changes (run `git status` first)
 - ✅ Use conventional commit format
-- ✅ Merge via GitHub CLI PR (CodeRabbit reviews) — merge has its own plan
+- ✅ Merge only via Merge Plan (Pre-Merge Steps + Merge Steps above)
 - ✅ Sprint branches stay in GitHub permanently
 - ❌ Never commit directly to `main`
 - ❌ Never delete sprint branches
@@ -609,13 +629,13 @@ git push origin sprint/2
 - Branch: `sprint/2`
 - Status: In progress
 
-### GitHub CLI Commands
+### GitHub CLI Commands (Merge Plan)
 ```bash
 gh pr status              # Check PR status
 gh pr view sprint/2       # View specific PR
 gh pr list                # List all PRs
 gh pr checks sprint/2     # View CI/review checks
-gh pr merge sprint/2 --merge  # Merge approved PR
+gh pr merge sprint/2 --merge  # After approval, run Merge Steps
 ```
 
 ---

@@ -93,11 +93,12 @@ This project follows a **sprint-based branching strategy** for bootcamp capstone
 
 **Sprint Lifecycle:**
 1. Create sprint branch from `main`
-2. Complete videos, commit and push each one
-3. Create Pull Request via GitHub CLI
-4. CodeRabbit reviews PR
-5. Merge PR via GitHub CLI
-6. Sprint branch **remains in GitHub permanently** (checkpoint for reviewers)
+2. Complete videos, commit and push each one (Commit Plan)
+3. Complete Pre-Merge Steps (clean notebooks, learning comments, local READMEs, root README)
+4. Create Pull Request via GitHub CLI (Merge Plan)
+5. CodeRabbit reviews PR
+6. Merge PR via GitHub CLI
+7. Sprint branch **remains in GitHub permanently** (checkpoint for reviewers)
 
 ---
 
@@ -106,7 +107,7 @@ This project follows a **sprint-based branching strategy** for bootcamp capstone
 **Rules:**
 - **Always sign commits** — Use `-S` flag on every `git commit`
 - **Commit all changes** — Run `git status` to find all changes (tracked + untracked), then stage and commit everything
-- **Merge is separate** — Merge has its own plan; do not include merge steps in the commit plan
+- **Merge is separate** — See Merge Plan (Pre-Merge Steps + Merge Steps); do not include merge steps in the commit plan
 
 **Pre-commit checks:**
 ```bash
@@ -211,7 +212,18 @@ git push origin sprint/2
 # Repeat for each video (6-9 times)
 ```
 
-#### Completing Sprint (Merge Plan — Separate from Commit Plan)
+#### Merge Plan
+
+**Pre-Merge Steps** (complete before creating PR):
+
+| Step | Action | Details |
+|------|--------|---------|
+| 1 | Clean notebooks | `make clean-notebook-outputs` |
+| 2 | Learning comments | Heavily comment all code files (exclude .cursorrules, CLAUDE.MD, .coderabbit.yaml). Focus on learning: concepts, why, architecture, course references. |
+| 3 | Local READMEs | Create/update README in every code/notebook folder. Each explains what was done, why, how code works, ties files together. |
+| 4 | Root README | Update root README.md — holistic super README: what was done and why, architecture overview, learning journey. Point to local READMEs (no duplication). |
+
+**Merge Steps:**
 
 ```bash
 # 1. Create Pull Request via GitHub CLI
@@ -249,7 +261,7 @@ git pull origin main
 - Use conventional commit format
 - Include hotfixes in sprint branch (document in commit message)
 - Keep sprint branches in GitHub permanently
-- Merge only via Pull Request (merge has its own plan)
+- Merge only via Merge Plan (Pre-Merge Steps + Merge Steps above)
 
 **❌ DON'T:**
 - Commit directly to `main`
