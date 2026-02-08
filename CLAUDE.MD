@@ -1,7 +1,7 @@
 # Project Claude Code Documentation
 
 **Project:** AI Engineering Bootcamp Prerequisites
-**Last Updated:** 2026-01-24
+**Last Updated:** 2026-01-27
 **Location:** `/Users/christopher/Development/_me/ai-engineering-bootcamp-prerequisites_me/CLAUDE.MD`
 
 > **Global Config:** See `~/.claude/CLAUDE.md` for Claude Code installation, plugins, and MCP servers.
@@ -101,6 +101,49 @@ This project follows a **sprint-based branching strategy** for bootcamp capstone
 
 ---
 
+### Commit Plan (Commit Workflow Only — No Merge)
+
+**Rules:**
+- **Always sign commits** — Use `-S` flag on every `git commit`
+- **Commit all changes** — Run `git status` to find all changes (tracked + untracked), then stage and commit everything
+- **Merge is separate** — Merge has its own plan; do not include merge steps in the commit plan
+
+**Pre-commit checks:**
+```bash
+make clean-notebook-outputs   # Clean Jupyter outputs before commit
+make health                   # Verify infrastructure
+make smoke-test               # End-to-end RAG pipeline test
+```
+
+**Commit workflow:**
+```bash
+# 1. Find all changes
+git status
+
+# 2. Stage all changes (review .gitignore — never stage .env)
+git add .
+# Or stage specific files: git add path/to/file1 path/to/file2
+
+# 3. Commit ALL changes (signed)
+git commit -S -m "feat(sprint2): complete video N - description"
+
+# 4. Push
+git push origin sprint/2
+```
+
+**Logical grouping (optional):** When multiple unrelated changes exist, consider separate commits:
+```bash
+git add .coderabbit.yaml
+git commit -S -m "chore(sprint2): add CodeRabbit review configuration"
+
+git add notebooks/week3/04-Agent-Single-Turn.ipynb
+git commit -S -m "feat(sprint2): complete video 5 - ReAct agent with retrieval tool"
+
+git push origin sprint/2
+```
+
+---
+
 ### Commit Message Convention
 
 **Format:** Conventional Commits, signed with GPG using `-S` flag (never reference Claude/Cursor)
@@ -143,25 +186,32 @@ git pull origin main
 git checkout -b sprint/2
 ```
 
-#### During Sprint (Per Video)
+#### During Sprint (Per Video or When Ready)
 
 ```bash
 # 1. Complete video work
 # ... make your changes ...
 
-# 2. Stage changes
-git add .
+# 2. Pre-commit checks
+make clean-notebook-outputs
+make health
+make smoke-test
 
-# 3. Commit with conventional format (signed with -S)
+# 3. Find and stage ALL changes
+git status
+git add .
+# Review: never stage .env
+
+# 4. Commit with conventional format (ALWAYS signed with -S)
 git commit -S -m "feat(sprint2): complete video 3 - langraph implementation"
 
-# 4. Push to GitHub (backup + visibility)
+# 5. Push to GitHub (backup + visibility)
 git push origin sprint/2
 
 # Repeat for each video (6-9 times)
 ```
 
-#### Completing Sprint
+#### Completing Sprint (Merge Plan — Separate from Commit Plan)
 
 ```bash
 # 1. Create Pull Request via GitHub CLI
@@ -194,10 +244,12 @@ git pull origin main
 **✅ DO:**
 - Create all sprint branches from `main`
 - Push after each video commit (backup protection)
-- Use conventional commit format with signing (`-S` flag)
+- **Always sign commits** (`-S` flag)
+- Commit all changes (run `git status` to find tracked + untracked)
+- Use conventional commit format
 - Include hotfixes in sprint branch (document in commit message)
 - Keep sprint branches in GitHub permanently
-- Merge only via Pull Request
+- Merge only via Pull Request (merge has its own plan)
 
 **❌ DON'T:**
 - Commit directly to `main`

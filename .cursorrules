@@ -546,6 +546,25 @@ docker compose restart api
 - **Scope**: One sprint = All videos in that sprint
 - **Lifecycle**: Create from `main` → Merge to `main` → Keep permanently
 
+### Commit Plan (Commit Only — No Merge)
+**Rules:**
+- **Always sign commits** — Use `-S` on every `git commit`
+- **Commit all changes** — Run `git status` to find all changes (tracked + untracked), stage and commit everything
+- **Merge is separate** — Merge has its own plan; not part of commit workflow
+
+**Pre-commit:**
+```bash
+make clean-notebook-outputs && make health && make smoke-test
+```
+
+**Commit workflow:**
+```bash
+git status                    # Find ALL changes
+git add .                     # Stage all (never .env)
+git commit -S -m "feat(sprint2): complete video N - description"
+git push origin sprint/2
+```
+
 ### Commit Convention
 **Format**: Conventional commits, signed with GPG (never reference Claude/Cursor)
 ```bash
@@ -554,6 +573,7 @@ fix(sprint2): correct agent pipeline validation
 docs(sprint2): add multi-agent architecture docs
 refactor(sprint2): optimize agent orchestration
 test(sprint2): add unit tests for agent tools
+chore(sprint2): add CodeRabbit review configuration
 ```
 
 ### Workflow (CLI-Only)
@@ -561,22 +581,23 @@ test(sprint2): add unit tests for agent tools
 # Start sprint
 git checkout main && git checkout -b sprint/2
 
-# Per video (repeat 6-9 times)
-git add . && git commit -S -m "feat(sprint2): complete video N - description"
+# Per video / when ready (repeat 6-9 times)
+make clean-notebook-outputs && make health && make smoke-test
+git status
+git add .
+git commit -S -m "feat(sprint2): complete video N - description"
 git push origin sprint/2
 
-# Complete sprint
-gh pr create --base main --head sprint/2 --title "Sprint 2: Agents & Agentic Systems" --body "Completed all videos for Sprint 2. Ready for review."
-gh pr status  # Check CodeRabbit review
-gh pr merge sprint/2 --merge
-git checkout main && git pull origin main
+# Merge plan is separate (see CLAUDE.MD)
 ```
 
 ### Rules
 - ✅ All work in sprint branches (including hotfixes)
 - ✅ Push after each video commit (backup protection)
-- ✅ Use conventional commit format with signing (`-S` flag)
-- ✅ Merge via GitHub CLI PR (CodeRabbit reviews)
+- ✅ **Always sign commits** (`-S` flag)
+- ✅ Commit all changes (run `git status` first)
+- ✅ Use conventional commit format
+- ✅ Merge via GitHub CLI PR (CodeRabbit reviews) — merge has its own plan
 - ✅ Sprint branches stay in GitHub permanently
 - ❌ Never commit directly to `main`
 - ❌ Never delete sprint branches
