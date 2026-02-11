@@ -3,8 +3,8 @@
 
 language: "en-US"
 
-# Tone: concise, constructive feedback aligned with bootcamp learning goals
-tone_instructions: "Provide concise, constructive code review feedback. Focus on correctness, maintainability, and patterns relevant to RAG/AI engineering. Be direct but supportive—this is a learning project."
+# Tone: concise, constructive feedback aligned with bootcamp learning goals (max 250 chars)
+tone_instructions: "Concise, constructive feedback. Focus on RAG/AI and agentic patterns (LangGraph, tools). Be direct and supportive. Flag project conventions (uv, api.X imports, Optional) and lessons-learned pitfalls."
 
 early_access: true
 
@@ -25,31 +25,32 @@ reviews:
   path_instructions:
     - path: "apps/api/**/*.py"
       instructions: |
-        This is FastAPI backend code. Check: use uv not pip; imports use api.X not apps.api.src.api.X;
-        Pydantic models use Optional for nullable fields; Docker networking uses service names (qdrant:6333) not localhost.
+        FastAPI backend. Conventions: use uv not pip; imports from api.X not apps.api.src.api.X;
+        Pydantic use Optional for nullable fields; Docker use service names (qdrant:6333) not localhost.
+        Instructor requires response_model= in create_with_completion(). Avoid KeyError by validating return structure.
     - path: "apps/api/**/*.yaml"
       instructions: |
         YAML prompt configs. Use Jinja2 {{ variable }} syntax; preserve metadata (version, author);
         multiline strings use | for literal blocks.
     - path: "notebooks/**/*.ipynb"
       instructions: |
-        Learning notebooks. Code quality matters but prioritize clarity for tutorials.
-        Ensure outputs are cleaned before commit (make clean-notebook-outputs).
+        Learning notebooks. Prioritize clarity for tutorials; code quality matters.
+        Clean outputs before commit (make clean-notebook-outputs). Prefer load_dotenv() at notebook start when using .env.
+    - path: "notebooks/week4/**/*"
+      instructions: |
+        Week 4 multi-turn agent: LangGraph + Postgres checkpointer. Require psycopg[binary] for PostgresSaver (no .save() method—use compile(checkpointer=...) then invoke with config.thread_id).
+        State/config: thread_id in config.configurable; initial_state with messages and available_tools. DB setup once (check checkpoint table exists before setup()). postgres_data/ is gitignored.
+    - path: "scripts/**/*.py"
+      instructions: |
+        Test/utility scripts (health_check, smoke_test). Run via make (e.g. make health, make smoke-test).
+        Exit code 0 success / 1 failure for CI. Use localhost for API/Qdrant when scripts run on host (not in Docker).
 
-tools:
-  ruff:
-    enabled: true
-  yamllint:
-    enabled: true
-  gitleaks:
-    enabled: true
-  hadolint:
-    enabled: true
-
-pre_merge_checks:
-  title:
-    mode: warning
-    requirements: "Use conventional commits: feat(sprint2):, fix(sprint2):, docs(sprint2):, etc."
+# tools (ruff, yamllint, gitleaks, hadolint) require CodeRabbit Pro; omitted on free tier.
+# See https://docs.coderabbit.ai/tools — if you upgrade, add under reviews: e.g. reviews.tools.ruff.enabled: true
+  pre_merge_checks:
+    title:
+      mode: warning
+      requirements: "Use conventional commits: feat(sprint3):, fix(sprint3):, docs(sprint3):, etc. (or sprint/N for current sprint)."
 
 chat:
   art: false

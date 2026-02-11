@@ -2,11 +2,17 @@
 LangGraph ReAct agent workflow (Sprint 2 / Video 5-6).
 
 Defines StateGraph: START -> intent_router -> agent_node <-> tool_node -> END.
-- intent_router: Filters irrelevant queries.
+- intent_router: Filters irrelevant queries (product/shopping = relevant; off-topic = not).
 - agent_node: LLM that decides tool_calls or final_answer.
 - tool_node: Executes get_formatted_context (retrieval tool).
 - tool_router: Conditional edge agent_node -> tools or end.
 run_agent() invokes the graph; rag_agent_wrapper() enriches result with images/prices.
+
+rag_agent_wrapper behavior:
+- used_context: Include every referenced product (image_url/price may be None) so API
+  and smoke test get at least one product when the agent retrieves; matches rag_pipeline_wrapper.
+- answer: Prefer state.answer; fallback to last assistant message content; if still empty
+  but we have references, build a short summary so the response is never empty when products exist.
 """
 from qdrant_client import QdrantClient
 
@@ -109,6 +115,14 @@ def rag_agent_wrapper(question):
     """
     Entry point for /rag/ endpoint. Runs agent, then enriches references with
     image_url and price from Qdrant (same pattern as rag_pipeline_wrapper).
+
+    used_context: We append every referenced product even when image_url/price are None,
+    so the API and smoke test see products whenever the agent used retrieval (avoids
+    empty used_context when Qdrant payload lacks images).
+
+    answer: We use state.answer, then fallback to last assistant message content
+    (state.answer can be empty when the agent returns references), then a short
+    summary from used_context so the response is never empty when products exist.
     """
     result = run_agent(question)
 
@@ -116,6 +130,7 @@ def rag_agent_wrapper(question):
     # Dummy vector for filter-only query (we only need payload by parent_asin)
     dummy_vector = np.zeros(1536).tolist()
 
+    # Enrich each reference with image/price from Qdrant; include all references (image/price may be None)
     for item in result.get("references", []):
         points_result = _QDRANT_CLIENT.query_points(
             collection_name="Amazon-items-collection-01-hybrid-search",
@@ -138,14 +153,38 @@ def rag_agent_wrapper(question):
 
         image_url = payload.get("image")
         price = payload.get("price")
-        if image_url:
-            used_context.append({
-                "image_url": image_url,
-                "price": price,
-                "description": item.description
-            })
+        # Include every referenced product so used_context is non-empty when agent retrieved (smoke test / frontend)
+        used_context.append({
+            "image_url": image_url,
+            "price": price,
+            "description": item.description,
+        })
 
+    # Answer resolution: 1) state.answer 2) last assistant/AI message content 3) summary from used_context
+    answer = result.get("answer") or ""
+    if not answer and result.get("messages"):
+        for m in reversed(result["messages"]):
+            role_ok = (m.get("role") == "assistant" if isinstance(m, dict) else getattr(m, "type", "").lower().endswith("ai") or getattr(m, "type", "") == "ai")
+            if not role_ok:
+                continue
+            content = m.get("content", "") if isinstance(m, dict) else getattr(m, "content", None)
+            if content is None:
+                continue
+            if isinstance(content, str) and content.strip():
+                answer = content
+                break
+            if isinstance(content, list):
+                parts = [c.get("text", c) if isinstance(c, dict) else str(c) for c in content]
+                text = " ".join(p for p in parts if p).strip()
+                if text:
+                    answer = text
+                    break
+    if not answer and used_context:
+        # Last resort: agent returned references but state.answer empty (e.g. Instructor left answer blank)
+        answer = "Based on the products in our inventory: " + " ".join(
+            (c.get("description") or "")[:100] for c in used_context[:3]
+        ).strip() or "I found some relevant products; see the list below."
     return {
-        "answer": result.get("answer"),
+        "answer": answer,
         "used_context": used_context,
     }

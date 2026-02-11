@@ -68,6 +68,14 @@ smoke-test-verbose:
 	uv sync
 	uv run scripts/smoke_test.py --verbose
 
+# Target: smoke-test-postgres
+# Purpose: Verify Postgres (LangGraph checkpointer) is reachable and responds
+# When to use: After starting Docker, before running week4 notebook or any code using PostgresSaver
+# Output: Connect, SELECT 1, and whether checkpoint table exists
+smoke-test-postgres:
+	uv sync
+	uv run scripts/smoke_test_postgres.py
+
 # Target: run-evals-retriever
 # Purpose: Run RAGAS evaluation metrics against the RAG pipeline
 # When to use: After code changes, to ensure quality hasn't regressed

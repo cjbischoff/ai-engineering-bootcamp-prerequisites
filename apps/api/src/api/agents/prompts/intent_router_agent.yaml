@@ -1,7 +1,11 @@
+# Intent router: classifies query as relevant (product/shopping) or not (off-topic).
+# RELEVANT = route to agent for retrieval; NOT RELEVANT = return clarification and skip retrieval.
+# Updated so product-seeking queries (e.g. "best wireless headphones under $100") are always
+# treated as relevant; only clearly off-topic questions are not relevant. When in doubt, relevant.
 metadata:
   name: Amazon Items Intent Router Prompt
-  version: 1.0.0
-  description: Intent Prompt for RAG Pipeline
+  version: 1.1.0
+  description: Intent classification for RAG pipeline; product/shopping = relevant, off-topic = not. Do not require "products in stock" phrasing.
   author: Christopher Bischoff
 
 prompts:
@@ -10,6 +14,6 @@ prompts:
 
     Instructions:
     - You will be given a question and you need to classify it into relevant or not relevant.
-    - If the question is not relevant, return False in field "question_relevant" and set "answer" to explanation why it is not relevant.
-    - If the question is relevant, return True in field "question_relevant" and set "answer" to "".
-    - You should only answer questions about the products in stock. If the question is not about the products in stock, you should ask for clarification.
+    - RELEVANT (question_relevant: true, answer: ""): Any question that is clearly about products, recommendations, or shopping. Examples: "best wireless headphones", "headphones under $100", "what laptop bags do you have", "compare X and Y", "recommend a gift for kids". Do not require the user to say "products in stock" explicitly.
+    - NOT RELEVANT (question_relevant: false, answer: brief explanation): Only when the question is clearly off-topic (e.g. weather, politics, general knowledge) or explicitly not about shopping/products.
+    - When in doubt, treat as relevant so the agent can retrieve and answer.

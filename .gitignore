@@ -49,6 +49,9 @@ data/Electronics_2022_2023_with_category_ratings_100.jsonl
 # Qdrant vector database storage (runtime data)
 qdrant_storage/
 
+# PostgreSQL data (LangGraph checkpointer / runtime data)
+postgres_data/
+
 # Claude Code local settings (user-specific, not for repo)
 .claude/
 

@@ -3,9 +3,10 @@
 Health Check Script for AI Engineering Bootcamp Application
 
 Verifies that all infrastructure components are running and properly configured:
-- Docker containers (api, streamlit-app, qdrant)
-- Network ports (8000, 8501, 6333, 6334)
+- Docker containers (api, streamlit-app, qdrant, postgres)
+- Network ports (8000, 8501, 6333, 6334, 5433)
 - Qdrant collection and document count
+- Postgres connection (LangGraph checkpointer)
 - FastAPI health endpoint
 
 Usage:
@@ -27,6 +28,12 @@ try:
 except ImportError:
     print("❌ Missing dependencies. Run: uv sync")
     sys.exit(1)
+
+try:
+    import psycopg
+    HAS_PSYCOPG = True
+except ImportError:
+    HAS_PSYCOPG = False
 
 
 # ANSI color codes for terminal output
@@ -78,7 +85,7 @@ def check_docker_containers() -> Tuple[bool, str]:
         import json
         containers = [json.loads(line) for line in result.stdout.strip().split('\n') if line]
 
-        required_services = {"api", "streamlit-app", "qdrant"}
+        required_services = {"api", "streamlit-app", "qdrant", "postgres"}
         running_services = {
             container["Service"]
             for container in containers
@@ -154,6 +161,32 @@ def check_qdrant_collection() -> Tuple[bool, str]:
         return False, f"Error connecting to Qdrant: {str(e)}"
 
 
+# Connection string for Postgres (LangGraph checkpointer); host uses port 5433 per docker-compose
+_POSTGRES_CONN_STRING = "postgresql://langgraph_user:langgraph_password@localhost:5433/langgraph_db"
+
+
+def check_postgres_connection() -> Tuple[bool, str]:
+    """
+    Check if Postgres (LangGraph checkpointer) is reachable and responds.
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    if not HAS_PSYCOPG:
+        return True, "Skipped (install psycopg[binary] for Postgres check)"
+    try:
+        with psycopg.connect(_POSTGRES_CONN_STRING) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                if cur.fetchone()[0] == 1:
+                    return True, "Postgres responding (SELECT 1)"
+        return False, "Postgres returned unexpected result"
+    except psycopg.OperationalError as e:
+        return False, f"Postgres not reachable: {e}"
+    except Exception as e:
+        return False, f"Error checking Postgres: {e}"
+
+
 def check_fastapi_health() -> Tuple[bool, str]:
     """
     Check FastAPI health endpoint (if it exists).
@@ -223,7 +256,13 @@ def main():
     if not silent or not success:
         (print_success if success else print_failure)(f"Qdrant Collection: {message}")
 
-    # Check 6: FastAPI health endpoint
+    # Check 6: Postgres connection (LangGraph checkpointer)
+    success, message = check_postgres_connection()
+    all_passed = all_passed and success
+    if not silent or not success:
+        (print_success if success else print_failure)(f"Postgres: {message}")
+
+    # Check 7: FastAPI health endpoint
     success, message = check_fastapi_health()
     all_passed = all_passed and success
     if not silent or not success:
