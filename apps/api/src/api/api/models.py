@@ -109,6 +109,8 @@ class RAGRequest(BaseModel):
     """
 
     query: str = Field(..., description="The query to be used in the RAG pipeline")
+    # Required for multi-turn (Week 4): LangGraph checkpointer keys state by thread_id.
+    thread_id: str = Field(..., description="Thread ID for conversation continuity (checkpointing)")
 
 
 class RAGResponse(BaseModel):

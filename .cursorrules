@@ -437,7 +437,7 @@ make run-evals-retriever        # Run RAGAS evaluation metrics
 ### Quick Reference
 - **First time setup**: `make install` → `make up` → `make health`
 - **Daily workflow**: `make run-docker-compose` (Terminal 1) → `make health` (Terminal 2)
-- **Before commit**: `make smoke-test` → `make clean-notebook-outputs` (if edited notebooks)
+- **Before commit**: `make clean-notebook-outputs` → `make health` → `make smoke-test` → review working-tree changes and add learning comments (why/how) in changed files
 - **After dependency change**: `uv lock` → `docker compose build api` → `make up`
 
 ---
@@ -554,8 +554,16 @@ docker compose restart api
 
 **Pre-commit:**
 ```bash
-make clean-notebook-outputs && make health && make smoke-test
+# Step 1: Clean notebook outputs
+make clean-notebook-outputs
+# Step 2: Verify infrastructure
+make health
+# Step 3: End-to-end RAG pipeline test
+make smoke-test
+# Step 4: Review and comment changes (see below)
 ```
+
+**Step 4 (before staging/commit):** Review all changes in the working tree since last commit (`git status` / `git diff`). In every changed file, add learning-focused comments to the changed sections: explain **why** (reason for the change) and **how** (what the code does and how it fits). Goal: support your understanding and teaching. Then proceed to commit workflow.
 
 **Commit workflow:**
 ```bash
@@ -583,6 +591,7 @@ git checkout main && git checkout -b sprint/2
 
 # Per video / when ready (repeat 6-9 times)
 make clean-notebook-outputs && make health && make smoke-test
+# Step 4: Review git diff; add learning comments (why/how) to changed files
 git status
 git add .
 git commit -S -m "feat(sprint2): complete video N - description"

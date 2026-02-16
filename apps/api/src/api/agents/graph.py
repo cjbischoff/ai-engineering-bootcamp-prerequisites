@@ -30,6 +30,7 @@ from api.agents.tools import get_formatted_context
 from api.agents.utils.utils import get_tool_descriptions
 from langgraph.graph import END, START
 from langgraph.prebuilt import ToolNode
+from langgraph.checkpoint.postgres import PostgresSaver  # Persist conversation state per thread (Week 4 multi-turn)
 
 
 # --- State: shared across all nodes; add reducer appends messages and references ---
@@ -94,24 +95,36 @@ workflow.add_conditional_edges(
 
 workflow.add_edge("tool_node", "agent_node")
 
-graph = workflow.compile()
 
 
 # --- Execution: run_agent invokes graph; rag_agent_wrapper enriches for frontend ---
-def run_agent(question: str) -> dict:
+def run_agent(question: str, thread_id: str) -> dict:
     initial_state = {
         "messages": [{"role": "user", "content": question}],
         "iteration": 0,
         "available_tools": tool_descriptions,
     }
-    result = graph.invoke(initial_state)
+    # LangGraph checkpointing: thread_id scopes saved state so multi-turn conversations
+    # resume correctly (same thread_id => same conversation history in Postgres).
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+    # Compile inside context so checkpointer is used for this run; PostgresSaver
+    # writes state after each step so we can resume/replay by thread_id.
+    with PostgresSaver.from_conn_string("postgresql://langgraph_user:langgraph_password@postgres:5432/langgraph_db") as checkpointer:
+        graph = workflow.compile(checkpointer=checkpointer)
+        result = graph.invoke(initial_state, config)
+
     return result
 
 
 
 
 
-def rag_agent_wrapper(question):
+def rag_agent_wrapper(question, thread_id):
     """
     Entry point for /rag/ endpoint. Runs agent, then enriches references with
     image_url and price from Qdrant (same pattern as rag_pipeline_wrapper).
@@ -124,7 +137,7 @@ def rag_agent_wrapper(question):
     (state.answer can be empty when the agent returns references), then a short
     summary from used_context so the response is never empty when products exist.
     """
-    result = run_agent(question)
+    result = run_agent(question, thread_id)
 
     used_context = []
     # Dummy vector for filter-only query (we only need payload by parent_asin)

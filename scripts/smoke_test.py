@@ -131,9 +131,10 @@ def run_smoke_test(query: str, verbose: bool = False) -> bool:
     # Test 1: API responds
     try:
         start_time = time.time()
+        # thread_id required by API (LangGraph checkpointing); fixed ID for reproducible smoke run.
         response = requests.post(
             "http://localhost:8000/rag/",
-            json={"query": query},
+            json={"query": query, "thread_id": "smoke-test"},
             timeout=30
         )
         elapsed = time.time() - start_time

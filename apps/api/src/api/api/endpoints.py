@@ -93,8 +93,9 @@ def rag(request: Request, payload: RAGRequest) -> RAGResponse:
     # Sprint 2 / Video 6: ReAct agent replaces rag_pipeline_wrapper. Agent uses tools
     # (get_formatted_context) to retrieve; rag_agent_wrapper enriches references with
     # image_url and price from Qdrant (same response shape for frontend compatibility).
+    # thread_id: Required for LangGraph checkpointing (Week 4); same ID = same conversation.
     try:
-        answer = rag_agent_wrapper(payload.query)
+        answer = rag_agent_wrapper(payload.query, payload.thread_id)
     except Exception as e:
         logger.exception("RAG agent failed: %s", e)
         raise HTTPException(

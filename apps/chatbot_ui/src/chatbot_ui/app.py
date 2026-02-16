@@ -38,6 +38,7 @@ import requests  # HTTP library for making API calls to our FastAPI backend
 import streamlit as st  # Streamlit framework for building the web UI
 
 from chatbot_ui.core.config import config  # Configuration (API_URL from .env)
+import uuid
 
 # =============================================================================
 # PAGE CONFIGURATION
@@ -52,6 +53,12 @@ st.set_page_config(
 )
 # Why "expanded"? We're showing product recommendations in the sidebar (Video 4)
 # so we want it visible immediately, not requiring users to click to open it
+
+def get_session_id():
+    """Stable ID per browser session so the backend can persist multi-turn state (LangGraph thread_id)."""
+    if 'session_id' not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+    return st.session_state.session_id
 
 
 # =============================================================================
@@ -342,13 +349,14 @@ if prompt := st.chat_input("Hello! How can I assist you today?"):
 
     # 3. Call backend API and display assistant's response
     with st.chat_message("assistant"):
+        session_id = get_session_id()  # Same ID across turns so backend can load/save conversation state
         # Make POST request to RAG endpoint
-        # Educational: We're sending JSON: {"query": "user's question"}
+        # Educational: We're sending JSON: {"query": "user's question", "thread_id": "..."}
         # API returns JSON: {"request_id": "...", "answer": "...", "used_context": [...]}
         status, output = api_call(
             "post",  # HTTP POST method
             f"{config.API_URL}/rag",  # URL from config (e.g., "http://api:8000/rag")
-            json={"query": prompt}  # Request body (automatically serialized to JSON)
+            json={"query": prompt, "thread_id": session_id}  # thread_id required for checkpointing (Week 4)
         )
         # Educational: requests library automatically:
         # - Sets Content-Type: application/json header

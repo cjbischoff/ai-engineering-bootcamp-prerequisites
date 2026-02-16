@@ -111,10 +111,16 @@ This project follows a **sprint-based branching strategy** for bootcamp capstone
 
 **Pre-commit checks:**
 ```bash
-make clean-notebook-outputs   # Clean Jupyter outputs before commit
-make health                   # Verify infrastructure
-make smoke-test               # End-to-end RAG pipeline test
+# Step 1: Clean Jupyter outputs before commit
+make clean-notebook-outputs
+# Step 2: Verify infrastructure (containers, ports, Qdrant, Postgres, API)
+make health
+# Step 3: End-to-end RAG pipeline test
+make smoke-test
+# Step 4: Review and comment changes (before staging — see below)
 ```
+
+**Step 4 (before staging/commit):** Review all changes in the working tree since last commit (`git status` / `git diff`). In every changed file, add learning-focused comments to the changed sections: explain **why** (reason for the change) and **how** (what the code does and how it fits). Goal: support your understanding and teaching. Then proceed to commit workflow.
 
 **Commit workflow:**
 ```bash
@@ -197,6 +203,7 @@ git checkout -b sprint/2
 make clean-notebook-outputs
 make health
 make smoke-test
+# Step 4: Review working tree (git diff); add learning comments (why/how) to changed files
 
 # 3. Find and stage ALL changes
 git status
