@@ -26,7 +26,7 @@ from typing import Annotated, Any
 from operator import add
 from api.agents.agents import ToolCall, RAGUsedContext, agent_node, intent_router_node
 from langgraph.graph import StateGraph
-from api.agents.tools import get_formatted_context
+from api.agents.tools import get_formatted_context, get_formatted_reviews_context
 from api.agents.utils.utils import get_tool_descriptions
 from langgraph.graph import END, START
 from langgraph.prebuilt import ToolNode
@@ -65,7 +65,9 @@ def intent_router_conditional_edges(state: State) -> str:
 # --- Build graph: nodes + edges (Video 5 pattern) ---
 workflow = StateGraph(State)
 
-tools = [get_formatted_context]
+# Week 4 multiple tools: agent can call product retrieval and/or reviews retrieval.
+# get_formatted_context = product descriptions; get_formatted_reviews_context = reviews filtered by item IDs.
+tools = [get_formatted_context, get_formatted_reviews_context]
 tool_node = ToolNode(tools)
 tool_descriptions = get_tool_descriptions(tools)
 
