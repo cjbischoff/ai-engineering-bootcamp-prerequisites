@@ -553,17 +553,17 @@ docker compose restart api
 - **Merge is separate** — See Merge Plan (Pre-Merge Steps + Merge Steps); not part of commit workflow
 
 **Pre-commit:**
-```bash
-# Step 1: Clean notebook outputs
-make clean-notebook-outputs
-# Step 2: Verify infrastructure
-make health
-# Step 3: End-to-end RAG pipeline test
-make smoke-test
-# Step 4: Review and comment changes (see below)
-```
+1. **Clean notebook outputs:** `make clean-notebook-outputs`
+2. **Verify infrastructure:** `make health`
+3. **End-to-end RAG pipeline test:** `make smoke-test`
+4. **Add comments to changed files:** Review all changes since last commit (`git status` / `git diff`). In every changed file, add learning-focused comments to the changed sections: explain **why** (reason for the change) and **how** (what the code does and how it fits). Goal: support your understanding and teaching. Then proceed to commit workflow.
 
-**Step 4 (before staging/commit):** Review all changes in the working tree since last commit (`git status` / `git diff`). In every changed file, add learning-focused comments to the changed sections: explain **why** (reason for the change) and **how** (what the code does and how it fits). Goal: support your understanding and teaching. Then proceed to commit workflow.
+```bash
+make clean-notebook-outputs
+make health
+make smoke-test
+# Step 4: Add learning comments to changed files (see above), then:
+```
 
 **Commit workflow:**
 ```bash
@@ -591,7 +591,7 @@ git checkout main && git checkout -b sprint/2
 
 # Per video / when ready (repeat 6-9 times)
 make clean-notebook-outputs && make health && make smoke-test
-# Step 4: Review git diff; add learning comments (why/how) to changed files
+# Step 4: Add learning comments to all changed files (git diff); then:
 git status
 git add .
 git commit -S -m "feat(sprint2): complete video N - description"

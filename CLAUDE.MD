@@ -110,17 +110,17 @@ This project follows a **sprint-based branching strategy** for bootcamp capstone
 - **Merge is separate** — See Merge Plan (Pre-Merge Steps + Merge Steps); do not include merge steps in the commit plan
 
 **Pre-commit checks:**
-```bash
-# Step 1: Clean Jupyter outputs before commit
-make clean-notebook-outputs
-# Step 2: Verify infrastructure (containers, ports, Qdrant, Postgres, API)
-make health
-# Step 3: End-to-end RAG pipeline test
-make smoke-test
-# Step 4: Review and comment changes (before staging — see below)
-```
+1. **Clean notebook outputs:** `make clean-notebook-outputs`
+2. **Verify infrastructure:** `make health` (containers, ports, Qdrant, Postgres, API)
+3. **End-to-end RAG pipeline test:** `make smoke-test`
+4. **Add comments to changed files:** Review all changes since last commit (`git status` / `git diff`). In every changed file, add learning-focused comments to the changed sections: explain **why** (reason for the change) and **how** (what the code does and how it fits). Goal: support your understanding and teaching. Then proceed to commit workflow.
 
-**Step 4 (before staging/commit):** Review all changes in the working tree since last commit (`git status` / `git diff`). In every changed file, add learning-focused comments to the changed sections: explain **why** (reason for the change) and **how** (what the code does and how it fits). Goal: support your understanding and teaching. Then proceed to commit workflow.
+```bash
+make clean-notebook-outputs
+make health
+make smoke-test
+# Step 4: Add learning comments to changed files (see above), then:
+```
 
 **Commit workflow:**
 ```bash

@@ -19,7 +19,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 
 from api.agents.graph import rag_agent_wrapper
-from api.api.models import RAGRequest, RAGResponse, RAGUsedContext
+from api.api.models import RAGRequest, RAGResponse, RAGUsedContext, FeedbackRequest, FeedbackResponse
+from api.api.processors.submit_feedback import submit_feedback
 
 # Configure logging to track API requests and errors
 # Format includes timestamp, logger name, level (INFO/ERROR), and message
@@ -32,6 +33,10 @@ logger = logging.getLogger(__name__)
 # Create router for RAG-specific endpoints
 # This allows grouping related endpoints and applying common middleware/tags
 rag_router = APIRouter()
+feedback_router = APIRouter()
+
+
+
 
 
 @rag_router.post("/")
@@ -130,9 +135,40 @@ def rag(request: Request, payload: RAGRequest) -> RAGResponse:
         request_id=request.state.request_id,
         answer=answer["answer"],
         used_context=[
-            RAGUsedContext(**used_context) for used_context in answer["used_context"]
+            RAGUsedContext(**uc) for uc in answer["used_context"]
         ],
+        trace_id=answer["trace_id"],
     )
+
+
+
+
+
+
+@feedback_router.post("/")
+def send_feedback(
+    request: Request,
+    payload: FeedbackRequest,
+) -> FeedbackResponse:
+    # Log for troubleshooting: confirms trace_id and payload shape before calling LangSmith.
+    logger.info(
+        "Feedback received: trace_id=%s (present=%s), feedback_score=%s, has_text=%s",
+        payload.trace_id,
+        payload.trace_id is not None and bool(payload.trace_id),
+        payload.feedback_score,
+        bool(payload.feedback_text and payload.feedback_text.strip()),
+    )
+    submit_feedback(
+        payload.trace_id,
+        payload.feedback_score,
+        payload.feedback_text,
+        payload.feedback_source_type,
+    )
+    return FeedbackResponse(
+        request_id=request.state.request_id,
+        status="success",
+    )
+
 
 
 # Create main API router and mount the RAG router
@@ -152,3 +188,4 @@ api_router = APIRouter()
 #   - Documentation: Auto-generated OpenAPI docs group by tags
 #   - Versioning: Could create /v1/rag, /v2/rag routers separately
 api_router.include_router(rag_router, prefix="/rag", tags=["rag"])
+api_router.include_router(feedback_router, prefix="/submit_feedback", tags=["feedback"])

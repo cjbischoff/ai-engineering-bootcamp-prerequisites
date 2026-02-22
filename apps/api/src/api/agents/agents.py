@@ -11,7 +11,7 @@ from pathlib import Path
 
 from jinja2 import Template
 from langchain_core.messages import convert_to_openai_messages
-from langsmith import traceable
+from langsmith import traceable,get_current_run_tree
 from openai import OpenAI
 
 from api.agents.utils.prompt_management import prompt_template_config
@@ -77,17 +77,33 @@ def agent_node(state) -> dict:
     template = prompt_template_config(str(_PROMPTS_DIR / "qa_agent.yaml"), "qa_agent")
     prompt = template.render(available_tools=state.available_tools)
 
+    messages = state.messages
+
     # Convert LangGraph messages to OpenAI format for the LLM
     conversation = []
-    for message in state.messages:
+
+    for message in messages:
         conversation.append(convert_to_openai_messages(message))
 
-    response, _ = _get_instructor_client().chat.completions.create_with_completion(
+    client = instructor.from_openai(OpenAI())
+
+    response, raw_response = client.chat.completions.create_with_completion(
         model="gpt-4.1-mini",
         response_model=AgentResponse,
         messages=[{"role": "system", "content": prompt}, *conversation],
         temperature=0.5,
     )
+
+    current_run = get_current_run_tree()
+
+    if current_run:
+        current_run.metadata["usage_metadata"] = {
+            "input_tokens": raw_response.usage.prompt_tokens,
+            "output_tokens": raw_response.usage.completion_tokens,
+            "total_tokens": raw_response.usage.total_tokens
+        }
+
+
 
     # Convert AgentResponse to AIMessage (with tool_calls if present) for LangGraph
     ai_message = format_ai_message(response)
@@ -125,14 +141,37 @@ def intent_router_node(state):
     )
     prompt = template.render(query=query)
 
-    response, _ = _get_instructor_client().chat.completions.create_with_completion(
+    messages = state.messages
+
+    conversation = []
+
+    for message in messages:
+        conversation.append(convert_to_openai_messages(message))
+
+    client = instructor.from_openai(OpenAI())
+
+    response, raw_response = client.chat.completions.create_with_completion(
         model="gpt-4.1-mini",
         response_model=IntentRouterResponse,
-        messages=[{"role": "system", "content": prompt}, {"role": "user", "content": query}],
+        messages=[{"role": "system", "content": prompt}, *conversation],
         temperature=0.5,
     )
+
+    current_run = get_current_run_tree()
+
+    if current_run:
+            current_run.metadata["usage_metadata"] = {
+                "input_tokens": raw_response.usage.prompt_tokens,
+                "output_tokens": raw_response.usage.completion_tokens,
+                "total_tokens": raw_response.usage.total_tokens
+            }
+            # Expose trace/run id so UI can send feedback (thumbs/comment) to LangSmith for this run (Week 4).
+            trace_id = str(getattr(current_run, "trace_id", current_run.id))
+    else:
+        trace_id = None
 
     return {
         "question_relevant": response.question_relevant,
         "answer": response.answer,
+        "trace_id": trace_id
     }

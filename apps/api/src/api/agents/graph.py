@@ -43,6 +43,7 @@ class State(BaseModel):
     tool_calls: list[ToolCall] = []
     final_answer: bool = False
     references: Annotated[list[RAGUsedContext], add] = []
+    trace_id: str = ""
 
 def tool_router(state: State) -> str:
     """Conditional edge from agent_node: "tools" -> tool_node, "end" -> END."""
@@ -127,27 +128,12 @@ def run_agent(question: str, thread_id: str) -> dict:
 
 
 def rag_agent_wrapper(question, thread_id):
-    """
-    Entry point for /rag/ endpoint. Runs agent, then enriches references with
-    image_url and price from Qdrant (same pattern as rag_pipeline_wrapper).
-
-    used_context: We append every referenced product even when image_url/price are None,
-    so the API and smoke test see products whenever the agent used retrieval (avoids
-    empty used_context when Qdrant payload lacks images).
-
-    answer: We use state.answer, then fallback to last assistant message content
-    (state.answer can be empty when the agent returns references), then a short
-    summary from used_context so the response is never empty when products exist.
-    """
     result = run_agent(question, thread_id)
-
     used_context = []
-    # Dummy vector for filter-only query (we only need payload by parent_asin)
     dummy_vector = np.zeros(1536).tolist()
 
-    # Enrich each reference with image/price from Qdrant; include all references (image/price may be None)
     for item in result.get("references", []):
-        points_result = _QDRANT_CLIENT.query_points(
+        payload = _QDRANT_CLIENT.query_points(
             collection_name="Amazon-items-collection-01-hybrid-search",
             query=dummy_vector,
             limit=1,
@@ -161,45 +147,21 @@ def rag_agent_wrapper(question, thread_id):
                     )
                 ]
             )
-        )
-        if not points_result.points:
-            continue
-        payload = points_result.points[0].payload
+        ).points[0].payload
 
         image_url = payload.get("image")
         price = payload.get("price")
-        # Include every referenced product so used_context is non-empty when agent retrieved (smoke test / frontend)
-        used_context.append({
-            "image_url": image_url,
-            "price": price,
-            "description": item.description,
-        })
 
-    # Answer resolution: 1) state.answer 2) last assistant/AI message content 3) summary from used_context
-    answer = result.get("answer") or ""
-    if not answer and result.get("messages"):
-        for m in reversed(result["messages"]):
-            role_ok = (m.get("role") == "assistant" if isinstance(m, dict) else getattr(m, "type", "").lower().endswith("ai") or getattr(m, "type", "") == "ai")
-            if not role_ok:
-                continue
-            content = m.get("content", "") if isinstance(m, dict) else getattr(m, "content", None)
-            if content is None:
-                continue
-            if isinstance(content, str) and content.strip():
-                answer = content
-                break
-            if isinstance(content, list):
-                parts = [c.get("text", c) if isinstance(c, dict) else str(c) for c in content]
-                text = " ".join(p for p in parts if p).strip()
-                if text:
-                    answer = text
-                    break
-    if not answer and used_context:
-        # Last resort: agent returned references but state.answer empty (e.g. Instructor left answer blank)
-        answer = "Based on the products in our inventory: " + " ".join(
-            (c.get("description") or "")[:100] for c in used_context[:3]
-        ).strip() or "I found some relevant products; see the list below."
+        if image_url:
+            used_context.append({
+                "image_url": image_url,
+                "price": price,
+                "description": item.description
+            })
+
+    # trace_id from agent_node so frontend can POST feedback (thumbs/comment) to LangSmith (Week 4).
     return {
-        "answer": answer,
+        "answer": result.get("answer", ""),
         "used_context": used_context,
+        "trace_id": result.get("trace_id", "")
     }

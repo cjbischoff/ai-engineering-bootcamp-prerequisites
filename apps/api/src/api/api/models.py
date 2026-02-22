@@ -13,7 +13,7 @@ Benefits of Pydantic:
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Union
 
 
 class RAGUsedContext(BaseModel):
@@ -181,3 +181,18 @@ class RAGResponse(BaseModel):
     used_context: list[RAGUsedContext] = Field(
         ..., description="Information about the items used to answer the query"
     )
+    trace_id: str = Field(..., description="The trace ID")
+
+
+class FeedbackRequest(BaseModel):
+    """Request body for POST /submit_feedback/. Used to send thumbs and optional comment to LangSmith."""
+    feedback_score: Union[int, None] = Field(..., description="1 if the feedback is positive, 0 if the feedback is negative")
+    feedback_text: str = Field(..., description="The feedback text")
+    # Optional so UI can submit feedback even when trace_id not yet set (e.g. no RAG response yet).
+    trace_id: Optional[str] = Field(None, description="The trace ID (optional; required for LangSmith)")
+    thread_id: str = Field(..., description="The thread ID")
+    feedback_source_type: str = Field(..., description="The type of feedback. Human or API")
+
+class FeedbackResponse(BaseModel):
+    request_id: str = Field(..., description="The request ID")
+    status: str = Field(..., description="The status of the feedback submission")
