@@ -76,6 +76,14 @@ smoke-test-postgres:
 	uv sync
 	uv run scripts/smoke_test_postgres.py
 
+# Target: smoke-test-mcp
+# Purpose: Verify MCP servers (items_mcp_server, reviews_mcp_server) are up and responding
+# When to use: After starting Docker, when debugging MCP or Cursor tool use
+# Output: Port and HTTP checks for ports 8001 and 8002
+smoke-test-mcp:
+	uv sync
+	uv run scripts/smoke_test_mcp.py
+
 # Target: run-evals-retriever
 # Purpose: Run RAGAS evaluation metrics against the RAG pipeline
 # When to use: After code changes, to ensure quality hasn't regressed

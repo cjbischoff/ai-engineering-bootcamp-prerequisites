@@ -24,6 +24,8 @@ api = { workspace = true }
 members = [
     "apps/api",
     "apps/chatbot_ui",
+    "apps/items_mcp_server",
+    "apps/reviews_mcp_server",
 ]
 
 [dependency-groups]
@@ -42,6 +44,7 @@ dev = [
     "psycopg2-binary>=2.9.11",
     "langgraph-checkpoint-postgres>=3.0.4",
     "psycopg[binary]>=3.3.2",
+    "fastmcp>=3.0.2",
 ]
 
 # ============================================================================

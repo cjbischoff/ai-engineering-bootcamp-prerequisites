@@ -3,8 +3,8 @@
 Health Check Script for AI Engineering Bootcamp Application
 
 Verifies that all infrastructure components are running and properly configured:
-- Docker containers (api, streamlit-app, qdrant, postgres)
-- Network ports (8000, 8501, 6333, 6334, 5433)
+- Docker containers (api, streamlit-app, qdrant, postgres, items_mcp_server, reviews_mcp_server)
+- Network ports (8000, 8501, 6333, 6334, 5433, 8001, 8002)
 - Qdrant collection and document count
 - Postgres connection (LangGraph checkpointer)
 - FastAPI health endpoint
@@ -85,7 +85,15 @@ def check_docker_containers() -> Tuple[bool, str]:
         import json
         containers = [json.loads(line) for line in result.stdout.strip().split('\n') if line]
 
-        required_services = {"api", "streamlit-app", "qdrant", "postgres"}
+        # MCP servers (items, reviews) expose tools for agent; required for 04-MCP notebook
+        required_services = {
+            "api",
+            "streamlit-app",
+            "qdrant",
+            "postgres",
+            "items_mcp_server",
+            "reviews_mcp_server",
+        }
         running_services = {
             container["Service"]
             for container in containers
@@ -187,6 +195,30 @@ def check_postgres_connection() -> Tuple[bool, str]:
         return False, f"Error checking Postgres: {e}"
 
 
+def check_mcp_server(base_url: str, name: str) -> Tuple[bool, str]:
+    """
+    Check if an MCP server (FastMCP) is reachable via HTTP.
+
+    Learning: MCP servers use HTTP transport. GET on root may return 404/405 because
+    the MCP protocol uses POST/SSE for tool listing and invocation. Any response
+    (200, 404, 405) indicates the server process is running and reachable.
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    try:
+        response = requests.get(f"{base_url}/", timeout=5)
+        if response.status_code in (200, 404, 405):
+            return True, f"{name} responding (HTTP {response.status_code})"
+        return False, f"{name} returned HTTP {response.status_code}"
+    except requests.exceptions.ConnectionError:
+        return False, f"Cannot connect to {name} (connection refused)"
+    except requests.exceptions.Timeout:
+        return False, f"{name} health check timed out"
+    except Exception as e:
+        return False, f"Error checking {name}: {str(e)}"
+
+
 def check_fastapi_health() -> Tuple[bool, str]:
     """
     Check FastAPI health endpoint (if it exists).
@@ -267,6 +299,31 @@ def main():
     all_passed = all_passed and success
     if not silent or not success:
         (print_success if success else print_failure)(f"FastAPI Health: {message}")
+
+    # Check 8-11: MCP servers (items on 8001, reviews on 8002); agent needs both for tool calls
+    # Check 8: items_mcp_server port
+    success, message = check_port(8001, "items_mcp_server")
+    all_passed = all_passed and success
+    if not silent or not success:
+        (print_success if success else print_failure)(f"items_mcp_server Port: {message}")
+
+    # Check 9: reviews_mcp_server port
+    success, message = check_port(8002, "reviews_mcp_server")
+    all_passed = all_passed and success
+    if not silent or not success:
+        (print_success if success else print_failure)(f"reviews_mcp_server Port: {message}")
+
+    # Check 10: items_mcp_server HTTP
+    success, message = check_mcp_server("http://localhost:8001", "items_mcp_server")
+    all_passed = all_passed and success
+    if not silent or not success:
+        (print_success if success else print_failure)(f"items_mcp_server: {message}")
+
+    # Check 11: reviews_mcp_server HTTP
+    success, message = check_mcp_server("http://localhost:8002", "reviews_mcp_server")
+    all_passed = all_passed and success
+    if not silent or not success:
+        (print_success if success else print_failure)(f"reviews_mcp_server: {message}")
 
     # Summary
     if not silent:
