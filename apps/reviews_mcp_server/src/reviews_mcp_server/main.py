@@ -1,0 +1,36 @@
+"""
+Reviews MCP Server - Model Context Protocol server exposing review retrieval as tools.
+
+Learning: Separate MCP servers allow agents to call tools from different services (items vs reviews).
+Each server owns its data source; the agent orchestrates calls across servers. Port 8000 in container,
+8002 on host (docker-compose maps 8002->8000).
+"""
+from fastmcp import FastMCP
+
+from reviews_mcp_server.core.config import config
+from reviews_mcp_server.utils import retrieve_reviews_data, process_reviews_context
+
+mcp = FastMCP("reviews_mcp_server")
+
+
+@mcp.tool()
+def get_formatted_reviews_context(query: str, item_list: list, top_k: int = 15) -> str:
+    """
+    Get the top k reviews matching a query for a list of prefiltered items.
+    Args:
+        query: The query to get the top k reviews for
+        item_list: The list of item IDs to prefilter for before running the query
+        top_k: The number of reviews to retrieve, this should be at least 20 if multiple items are prefiltered
+    Returns:
+        A string of the top k context chunks with IDs prepending each chunk, each representing a review for a given inventory item for a given query.
+    """
+    context = retrieve_reviews_data(query, item_list, k=top_k)
+    # Must use process_reviews_context: retrieve_reviews_data returns no retrieved_context_ratings.
+    formatted_context = process_reviews_context(context)
+    return formatted_context
+
+
+if __name__ == "__main__":
+    mcp.run(transport="http", host="0.0.0.0", port=8000)  # HTTP for agent Client(url) connectivity
+
+

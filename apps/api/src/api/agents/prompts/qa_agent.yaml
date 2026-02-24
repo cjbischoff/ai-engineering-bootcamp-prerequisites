@@ -34,6 +34,15 @@ prompts:
             "top_k": 5
         }
     }
+    - Get formatted user reviews:
+    {
+        "name": "get_formatted_reviews_context",
+        "arguments": {
+            "query": "Durable.",
+            "item_list": ["123","456"],
+            "top_k": 5
+        }
+    }
 
     CRITICAL RULES:
     - If tool_calls has values, final_answer MUST be false

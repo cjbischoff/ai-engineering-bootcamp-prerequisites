@@ -12,7 +12,7 @@ This directory contains the production implementation of the RAG pipeline - a 5-
 apps/api/src/api/agents/
 ├── __init__.py
 ├── agents.py                    # ReAct agent_node, intent_router_node (Sprint 2)
-├── graph.py                     # StateGraph, run_agent, rag_agent_wrapper
+├── graph.py                     # StateGraph, rag_agent_stream_wrapper (SSE)
 ├── tools.py                     # get_formatted_context retrieval tool
 ├── retrieval_generation.py      # Original RAG pipeline (still used by evals)
 ├── utils/
@@ -35,10 +35,12 @@ START → intent_router_node → agent_node ⇄ tool_node → END
 
 - **intent_router_node**: Filters irrelevant queries (<Question> not about products).
 - **agent_node**: LLM decides tool_calls or final_answer.
-- **tool_node**: Executes `get_formatted_context` (retrieval tool).
+- **tool_node**: Executes `get_formatted_items_context` and `get_formatted_reviews_context` (Week 4).
 - **tool_router**: Conditional edge: tools → tool_node, end → END.
 
 **Why hide retrieval behind a tool?** The agent can decide when to retrieve, handle multi-step queries, and avoid retrieval for off-topic questions.
+
+**Streaming (Week 4):** `rag_agent_stream_wrapper` yields SSE events: plain-text status updates ("Analysing...", "Planning...") and a JSON `final_answer` event with answer, used_context, trace_id.
 
 ## RAG Pipeline Workflow
 

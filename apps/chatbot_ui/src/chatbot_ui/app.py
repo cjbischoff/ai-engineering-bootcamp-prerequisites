@@ -38,6 +38,14 @@ import requests  # HTTP library for making API calls to our FastAPI backend
 import streamlit as st  # Streamlit framework for building the web UI
 
 from chatbot_ui.core.config import config  # Configuration (API_URL from .env)
+import uuid
+import logging
+import json
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # PAGE CONFIGURATION
@@ -52,6 +60,45 @@ st.set_page_config(
 )
 # Why "expanded"? We're showing product recommendations in the sidebar (Video 4)
 # so we want it visible immediately, not requiring users to click to open it
+
+def get_session_id():
+    """Stable ID per browser session so the backend can persist multi-turn state (LangGraph thread_id)."""
+    if 'session_id' not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+    return st.session_state.session_id
+
+
+def submit_feedback(feedback_type=None, feedback_text=""):
+    """Submit thumbs and/or comment to API POST /submit_feedback/ for LangSmith (Week 4)."""
+    def _feedback_score(feedback_type):
+        if feedback_type == "positive":
+            return 1
+        elif feedback_type == "negative":
+            return 0
+        else:
+            return None
+
+    # trace_id from last RAG response (stored below); API/LangSmith need it to attach feedback to the run.
+    feedback_data = {
+        "feedback_score": _feedback_score(feedback_type),
+        "feedback_text": feedback_text,
+        "trace_id": st.session_state.trace_id,
+        "thread_id": get_session_id(),
+        "feedback_source_type": "api"
+    }
+
+    logger.info(
+        "Submitting feedback: trace_id=%s (present=%s), feedback_score=%s, has_text=%s",
+        st.session_state.trace_id,
+        st.session_state.trace_id is not None and bool(st.session_state.trace_id),
+        feedback_data["feedback_score"],
+        bool(feedback_text and feedback_text.strip()),
+    )
+
+    status, response = api_call("post", f"{config.API_URL}/submit_feedback/", json=feedback_data)
+    return status, response
+
+
 
 
 # =============================================================================
@@ -90,7 +137,6 @@ def api_call(method, url, **kwargs):
             answer = data["answer"]
             products = data["used_context"]
     """
-
     def _show_error_popup(message):
         """
         Display error message to user via Streamlit session state.
@@ -156,6 +202,41 @@ def api_call(method, url, **kwargs):
         return False, {"message": str(e)}
 
 
+
+def api_call_stream(method, url, **kwargs):
+    """
+    Make streaming HTTP request to /rag/ endpoint (SSE).
+
+    Returns either:
+    - Iterator of bytes/str (response.iter_lines()) on success
+    - (False, {"message": "..."}) on error (connection, timeout, etc.)
+
+    WHY check isinstance(stream_result, tuple)? On error we return (False, dict)
+    instead of an iterator. Caller must check before iterating to avoid
+    'bool' object has no attribute 'decode' when looping over error tuple.
+    """
+    def _show_error_popup(message):
+        """Show error message as a popup in the top-right corner"""
+        st.session_state["error_popup"] = {
+            "visible": True,
+            "message": message,
+        }
+
+    try:
+        response = getattr(requests, method)(url, stream=True, **kwargs)
+        return response.iter_lines()
+    except requests.exceptions.ConnectionError:
+        _show_error_popup("Connection error. Please check your network connection.")
+        return False, {"message": "Connection error"}
+    except requests.exceptions.Timeout:
+        _show_error_popup("The request timed out. Please try again later.")
+        return False, {"message": "Request timeout"}
+    except Exception as e:
+        _show_error_popup(f"An unexpected error occurred: {str(e)}")
+        return False, {"message": str(e)}
+
+
+
 # =============================================================================
 # SESSION STATE INITIALIZATION
 # =============================================================================
@@ -178,24 +259,6 @@ if "messages" not in st.session_state:
 
 
 # =============================================================================
-# RENDER CHAT HISTORY
-# =============================================================================
-# Display all previous messages in the chat interface
-# This happens on EVERY rerun, so users see the full conversation history
-
-for message in st.session_state.messages:
-    # st.chat_message() creates a styled chat bubble
-    # role="user" -> bubble on right side with user avatar
-    # role="assistant" -> bubble on left side with bot avatar
-    with st.chat_message(message["role"]):
-        # st.markdown() supports Markdown formatting (bold, italics, links, etc.)
-        # This allows rich text in responses (e.g., "**Product**: XYZ")
-        st.markdown(message["content"])
-# Educational: The "with" context manager ensures content goes inside the chat bubble
-# Without it, content would appear outside the styled bubble
-
-
-# =============================================================================
 # VIDEO 4 FEATURE: PRODUCT SUGGESTIONS SIDEBAR
 # =============================================================================
 # Initialize used_context in session state (stores product metadata)
@@ -212,6 +275,26 @@ if "used_context" not in st.session_state:
 # Why empty list initially?
 # - No conversation yet means no products to show
 # - Gets populated after first API call (see line 90 below)
+
+
+# Initialize feedback states (simplified)
+if "latest_feedback" not in st.session_state:
+    st.session_state.latest_feedback = None
+
+if "show_feedback_box" not in st.session_state:
+    st.session_state.show_feedback_box = False
+
+if "feedback_submission_status" not in st.session_state:
+    st.session_state.feedback_submission_status = None
+
+if "trace_id" not in st.session_state:
+    st.session_state.trace_id = None
+
+
+
+
+
+
 
 
 # Create sidebar content
@@ -314,6 +397,85 @@ with st.sidebar:
             # - Hide sidebar completely: if not used_context: st.sidebar.hide()
 
 
+for idx, message in enumerate(st.session_state.messages):
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+    # Add feedback buttons only for the latest assistant message (excluding the initial greeting)
+    is_latest_assistant = (
+        message["role"] == "assistant"
+        and idx == len(st.session_state.messages) - 1
+        and idx > 0
+    )
+
+    if is_latest_assistant:
+        # Use Streamlit's built-in feedback component
+        feedback_key = f"feedback_{len(st.session_state.messages)}"
+        feedback_result = st.feedback("thumbs", key=feedback_key)
+
+        # Handle feedback selection
+        if feedback_result is not None:
+            feedback_type = "positive" if feedback_result == 1 else "negative"
+
+            # Only submit if this is a new/different feedback
+            if st.session_state.latest_feedback != feedback_type:
+                with st.spinner("Submitting feedback..."):
+                    status, response = submit_feedback(feedback_type=feedback_type)
+                # Always set latest_feedback so we don't retry on every rerun (avoids request storm on 422)
+                st.session_state.latest_feedback = feedback_type
+                if status:
+                    st.session_state.feedback_submission_status = "success"
+                    st.session_state.show_feedback_box = (feedback_type == "negative")
+                else:
+                    st.session_state.feedback_submission_status = "error"
+                    st.error("Failed to submit feedback. Please try again.")
+                st.rerun()
+
+        # Show feedback status message
+        if st.session_state.latest_feedback and st.session_state.feedback_submission_status == "success":
+            if st.session_state.latest_feedback == "positive":
+                st.success("🎉 Thank you for your positive feedback!")
+            elif st.session_state.latest_feedback == "negative" and not st.session_state.show_feedback_box:
+                st.success("🙏 Thank you for your feedback!")
+        elif st.session_state.feedback_submission_status == "error":
+            st.error("❌ Failed to submit feedback. Please try again.")
+
+        # Show feedback text box if thumbs down was pressed
+        if st.session_state.show_feedback_box:
+            st.markdown("**Want to tell us more? (Optional)**")
+            st.caption("Your negative feedback has already been recorded. You can optionally provide additional details below.")
+
+            feedback_text = st.text_area(
+                "Additional feedback (optional)",
+                key=f"feedback_text_{len(st.session_state.messages)}",
+                placeholder="Please describe what was wrong with this response...",
+                height=100
+            )
+
+            col_send, col_spacer, col_close = st.columns([3, 5, 2])
+            with col_send:
+                if st.button("Send Additional Details", key=f"send_additional_{len(st.session_state.messages)}"):
+                    if feedback_text.strip():
+                        with st.spinner("Submitting additional feedback..."):
+                            status, response = submit_feedback(feedback_text=feedback_text)
+                        if status:
+                            st.success("✅ Thank you! Your additional feedback has been recorded.")
+                            st.session_state.show_feedback_box = False
+                        else:
+                            st.error("❌ Failed to submit additional feedback. Please try again.")
+                    else:
+                        st.warning("Please enter some feedback text before submitting.")
+                    st.rerun()
+
+            with col_close:
+                if st.button("Close", key=f"close_feedback_{len(st.session_state.messages)}"):
+                    st.session_state.show_feedback_box = False
+                    st.rerun()
+
+
+
+
+
 # =============================================================================
 # CHAT INPUT AND MESSAGE HANDLING
 # =============================================================================
@@ -342,45 +504,71 @@ if prompt := st.chat_input("Hello! How can I assist you today?"):
 
     # 3. Call backend API and display assistant's response
     with st.chat_message("assistant"):
-        # Make POST request to RAG endpoint
-        # Educational: We're sending JSON: {"query": "user's question"}
-        # API returns JSON: {"request_id": "...", "answer": "...", "used_context": [...]}
-        status, output = api_call(
-            "post",  # HTTP POST method
-            f"{config.API_URL}/rag",  # URL from config (e.g., "http://api:8000/rag")
-            json={"query": prompt}  # Request body (automatically serialized to JSON)
+        session_id = get_session_id()  # Same ID across turns so backend can load/save conversation state
+
+        status_placeholder = st.empty()
+        message_placeholder = st.empty()
+        stream_result = api_call_stream(
+            "post",
+            f"{config.API_URL}/rag",
+            json={"query": prompt, "thread_id": session_id},
+            headers={"Accept": "text/event-stream"},
         )
-        # Educational: requests library automatically:
-        # - Sets Content-Type: application/json header
-        # - Converts dict to JSON string
-        # - Sends in request body
+        # On error, api_call_stream returns (False, {"message": "..."}) instead of an iterator
+        if isinstance(stream_result, tuple):
+            _status, err_data = stream_result
+            err_msg = err_data.get("message", "Request failed")
+            logger.warning("Stream request failed: %s", err_msg)
+            status_placeholder.error(err_msg)
+            answer = err_msg
+            st.session_state.used_context = []
+        else:
+            answer = None
+            for line in stream_result:
+                line_text = line.decode("utf-8") if isinstance(line, bytes) else str(line)
+                if line_text.startswith("data: "):
+                    data = line_text[6:]
+                    try:
+                        output = json.loads(data)
 
-        # Extract data from API response
-        # Educational: We assume API call succeeded (output has expected structure)
-        # Production code should check: if status: ... else: show error
-        answer = output["answer"]  # LLM's natural language response
-        used_context = output["used_context"]  # List of product dicts (Video 3 feature)
+                        if output.get("type") == "error":
+                            answer = output.get("data", {}).get("message", "An error occurred")
+                            logger.warning("Stream error from backend: %s", answer)
+                            status_placeholder.error(answer)
+                            break
+                        if output.get("type") == "final_answer":
+                            answer = output["data"]["answer"]
+                            used_context = output["data"]["used_context"]
+                            trace_id = output["data"]["trace_id"]
 
-        # =============================================================================
-        # VIDEO 4: UPDATE SIDEBAR WITH NEW PRODUCTS
-        # =============================================================================
-        # Store products in session state so sidebar can display them
-        # Why here? We want sidebar to update immediately after getting API response
-        st.session_state.used_context = used_context
-        # Educational: This triggers sidebar to show products on next rerun (line 66-74)
-        # Sidebar code checks "if st.session_state.used_context:" and displays cards
+                            st.session_state.used_context = used_context
+                            st.session_state.trace_id = trace_id
 
-        # Display the LLM's answer in the chat
-        st.write(answer)
-        # Educational: st.write() is the Swiss Army knife of Streamlit
-        # It automatically formats based on data type:
-        # - String: displays as text
-        # - DataFrame: displays as table
-        # - Dict: displays as JSON
-        # - Plot: displays as chart
+                            st.session_state.latest_feedback = None
+                            st.session_state.show_feedback_box = False
+                            st.session_state.feedback_submission_status = None
 
-        # Add assistant's response to chat history
+                            status_placeholder.empty()
+                            message_placeholder.markdown(answer)
+                            logger.info("Received final_answer: trace_id=%s, used_context_len=%d", trace_id, len(used_context))
+                            break
+
+                    except json.JSONDecodeError:
+                        # Plain text status (not JSON): "Analysing the question...", "Planning...", etc.
+                        # Show in status_placeholder for progressive feedback (Week 4 streaming UX)
+                        status_text = data.strip()
+                        if status_text:
+                            logger.info("Stream status: %s", status_text)
+                            status_placeholder.markdown(f"*{status_text}*")
+                    
+
+
+
+        # Add assistant's response to chat history (single append; do not append inside final_answer block)
+        if answer is None:
+            answer = "No response received."
         st.session_state.messages.append({"role": "assistant", "content": answer})
+        logger.info("Appended assistant message to history (total=%d)", len(st.session_state.messages))
         # Educational: Now both user's question AND assistant's answer are in history
         # Next rerun will display them in the chat (see line 51-53)
 

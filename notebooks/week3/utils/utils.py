@@ -1,4 +1,19 @@
-"""Utilities for parsing function definitions and docstrings (e.g. for tool schemas)."""
+"""
+Utilities for LangGraph ReAct agents (Week 3 / Sprint 2).
+
+PURPOSE:
+--------
+Provides format_ai_message() and tool schema extraction for agent nodes.
+Used by notebooks and production API to convert LLM responses to LangChain
+AIMessage format and to build tool descriptions from function docstrings.
+
+KEY CONCEPTS (Bootcamp):
+- format_ai_message: Converts AgentResponse (from instructor/LLM) to AIMessage.
+  tool_call_id_prefix ensures unique IDs per turn (call_0, call_1) to avoid
+  OpenAI BadRequestError when reusing IDs across multi-turn conversations.
+- parse_function_definition: Uses Python AST to extract name, description,
+  parameters from function source (for LangGraph tool binding).
+"""
 
 import ast
 import inspect
@@ -7,13 +22,20 @@ from typing import Any, Dict
 from langchain_core.messages import AIMessage
 
 
-def format_ai_message(response):
+def format_ai_message(response, tool_call_id_prefix: str = "call"):
+    """
+    Format AgentResponse to AIMessage for LangGraph tool_node.
 
+    WHY tool_call_id_prefix? OpenAI requires each tool_call to have a unique ID.
+    In multi-turn agents, reusing IDs (e.g. call_0 every turn) causes:
+    BadRequestError: tool_call_ids did not have response messages.
+    Using call_{iteration}_0, call_{iteration}_1 per turn fixes this.
+    """
     if response.tool_calls:
         tool_calls = []
         for i, tc in enumerate(response.tool_calls):
             tool_calls.append({
-                "id": f"call_{i}",
+                "id": f"{tool_call_id_prefix}_{i}",
                 "name": tc.name,
                 "args": tc.arguments
             })

@@ -17,9 +17,11 @@ and future extensibility (e.g., adding /rag/health, /rag/feedback endpoints).
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
-from api.agents.graph import rag_agent_wrapper
-from api.api.models import RAGRequest, RAGResponse, RAGUsedContext
+from api.agents.graph import rag_agent_stream_wrapper
+from api.api.models import RAGRequest, RAGResponse, RAGUsedContext, FeedbackRequest, FeedbackResponse
+from api.api.processors.submit_feedback import submit_feedback
 
 # Configure logging to track API requests and errors
 # Format includes timestamp, logger name, level (INFO/ERROR), and message
@@ -32,10 +34,14 @@ logger = logging.getLogger(__name__)
 # Create router for RAG-specific endpoints
 # This allows grouping related endpoints and applying common middleware/tags
 rag_router = APIRouter()
+feedback_router = APIRouter()
+
+
+
 
 
 @rag_router.post("/")
-def rag(request: Request, payload: RAGRequest) -> RAGResponse:
+def rag(request: Request, payload: RAGRequest) -> StreamingResponse:
     """
     Answer questions about products using RAG pipeline.
 
@@ -93,14 +99,8 @@ def rag(request: Request, payload: RAGRequest) -> RAGResponse:
     # Sprint 2 / Video 6: ReAct agent replaces rag_pipeline_wrapper. Agent uses tools
     # (get_formatted_context) to retrieve; rag_agent_wrapper enriches references with
     # image_url and price from Qdrant (same response shape for frontend compatibility).
-    try:
-        answer = rag_agent_wrapper(payload.query)
-    except Exception as e:
-        logger.exception("RAG agent failed: %s", e)
-        raise HTTPException(
-            status_code=500,
-            detail="RAG pipeline failed. Please try again.",
-        ) from e
+    # thread_id: Required for LangGraph checkpointing (Week 4); same ID = same conversation.
+
 
     # Return structured response with request ID for tracing and enriched product context
     # request.state.request_id was set by RequestIDMiddleware
@@ -125,13 +125,40 @@ def rag(request: Request, payload: RAGRequest) -> RAGResponse:
     #     ...
     #   ]
     # }
-    return RAGResponse(
-        request_id=request.state.request_id,
-        answer=answer["answer"],
-        used_context=[
-            RAGUsedContext(**used_context) for used_context in answer["used_context"]
-        ],
+    return StreamingResponse(
+        rag_agent_stream_wrapper(payload.query, payload.thread_id),
+        media_type="text/event-stream",
     )
+
+
+
+
+
+
+@feedback_router.post("/")
+def send_feedback(
+    request: Request,
+    payload: FeedbackRequest,
+) -> FeedbackResponse:
+    # Log for troubleshooting: confirms trace_id and payload shape before calling LangSmith.
+    logger.info(
+        "Feedback received: trace_id=%s (present=%s), feedback_score=%s, has_text=%s",
+        payload.trace_id,
+        payload.trace_id is not None and bool(payload.trace_id),
+        payload.feedback_score,
+        bool(payload.feedback_text and payload.feedback_text.strip()),
+    )
+    submit_feedback(
+        payload.trace_id,
+        payload.feedback_score,
+        payload.feedback_text,
+        payload.feedback_source_type,
+    )
+    return FeedbackResponse(
+        request_id=request.state.request_id,
+        status="success",
+    )
+
 
 
 # Create main API router and mount the RAG router
@@ -151,3 +178,4 @@ api_router = APIRouter()
 #   - Documentation: Auto-generated OpenAPI docs group by tags
 #   - Versioning: Could create /v1/rag, /v2/rag routers separately
 api_router.include_router(rag_router, prefix="/rag", tags=["rag"])
+api_router.include_router(feedback_router, prefix="/submit_feedback", tags=["feedback"])

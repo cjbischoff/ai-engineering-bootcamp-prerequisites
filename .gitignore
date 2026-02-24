@@ -49,8 +49,16 @@ data/Electronics_2022_2023_with_category_ratings_100.jsonl
 # Qdrant vector database storage (runtime data)
 qdrant_storage/
 
+# PostgreSQL data (LangGraph checkpointer / runtime data)
+postgres_data/
+
 # Claude Code local settings (user-specific, not for repo)
-.claude/
+# Exception: Allow project-scoped settings (permissions, no secrets)
+.claude/*
+!.claude/settings.json
+
+# MCP server configuration (1Password secrets, safe to commit)
+# .mcp.json is tracked (uses op:// references, no plaintext secrets)
 
 # Serena LSP server cache (IDE tooling)
 .serena/
