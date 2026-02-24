@@ -17,8 +17,9 @@ and future extensibility (e.g., adding /rag/health, /rag/feedback endpoints).
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
-from api.agents.graph import rag_agent_wrapper
+from api.agents.graph import rag_agent_stream_wrapper
 from api.api.models import RAGRequest, RAGResponse, RAGUsedContext, FeedbackRequest, FeedbackResponse
 from api.api.processors.submit_feedback import submit_feedback
 
@@ -40,7 +41,7 @@ feedback_router = APIRouter()
 
 
 @rag_router.post("/")
-def rag(request: Request, payload: RAGRequest) -> RAGResponse:
+def rag(request: Request, payload: RAGRequest) -> StreamingResponse:
     """
     Answer questions about products using RAG pipeline.
 
@@ -99,14 +100,7 @@ def rag(request: Request, payload: RAGRequest) -> RAGResponse:
     # (get_formatted_context) to retrieve; rag_agent_wrapper enriches references with
     # image_url and price from Qdrant (same response shape for frontend compatibility).
     # thread_id: Required for LangGraph checkpointing (Week 4); same ID = same conversation.
-    try:
-        answer = rag_agent_wrapper(payload.query, payload.thread_id)
-    except Exception as e:
-        logger.exception("RAG agent failed: %s", e)
-        raise HTTPException(
-            status_code=500,
-            detail="RAG pipeline failed. Please try again.",
-        ) from e
+
 
     # Return structured response with request ID for tracing and enriched product context
     # request.state.request_id was set by RequestIDMiddleware
@@ -131,13 +125,9 @@ def rag(request: Request, payload: RAGRequest) -> RAGResponse:
     #     ...
     #   ]
     # }
-    return RAGResponse(
-        request_id=request.state.request_id,
-        answer=answer["answer"],
-        used_context=[
-            RAGUsedContext(**uc) for uc in answer["used_context"]
-        ],
-        trace_id=answer["trace_id"],
+    return StreamingResponse(
+        rag_agent_stream_wrapper(payload.query, payload.thread_id),
+        media_type="text/event-stream",
     )
 
 

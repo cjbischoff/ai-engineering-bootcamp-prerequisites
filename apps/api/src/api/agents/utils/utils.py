@@ -1,4 +1,4 @@
-"""Agent utils: format_ai_message, get_tool_descriptions. Sprint 2 / Video 5."""
+"""Agent utils: format_ai_message, get_tool_descriptions. Sprint 2 / Video 5; Week 4 multi-turn."""
 import ast
 import inspect
 from typing import Any
@@ -6,13 +6,18 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 
-def format_ai_message(response):
-    """Convert AgentResponse to AIMessage. Includes tool_calls when agent wants to invoke tools."""
+def format_ai_message(response, tool_call_id_prefix: str = "call"):
+    """
+    Convert AgentResponse to AIMessage. Includes tool_calls when agent wants to invoke tools.
+
+    tool_call_id_prefix: Unique prefix per turn (e.g. call_0, call_1) to avoid OpenAI
+    BadRequestError when same IDs reused across multi-turn conversation.
+    """
     if response.tool_calls:
         tool_calls = []
         for i, tc in enumerate(response.tool_calls):
             tool_calls.append({
-                "id": f"call_{i}",
+                "id": f"{tool_call_id_prefix}_{i}",
                 "name": tc.name,
                 "args": tc.arguments
             })

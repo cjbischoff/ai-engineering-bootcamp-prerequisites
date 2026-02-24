@@ -113,13 +113,15 @@ This project follows a **sprint-based branching strategy** for bootcamp capstone
 1. **Clean notebook outputs:** `make clean-notebook-outputs`
 2. **Verify infrastructure:** `make health` (containers, ports, Qdrant, Postgres, API)
 3. **End-to-end RAG pipeline test:** `make smoke-test`
-4. **Add comments to changed files:** Review all changes since last commit (`git status` / `git diff`). In every changed file, add learning-focused comments to the changed sections: explain **why** (reason for the change) and **how** (what the code does and how it fits). Goal: support your understanding and teaching. Then proceed to commit workflow.
+4. **Add comments to changed files:** Review all changes since last commit (`git status` / `git diff`). In every changed file, add learning-focused comments to the changed sections: explain **why** (reason for the change) and **how** (what the code does and how it fits). Goal: support your understanding and teaching.
+5. **Document all changed files (educational):** Before committing, ensure every modified file is fully documented. This is a critical step for the bootcamp learning experience. For each changed file: add/update module docstrings (purpose, concepts, course reference); add function/class docstrings; add inline comments for non-obvious logic; update or create README.md in affected directories. Documentation must be educational—explain why, how, and how it ties to the curriculum. No changed file should be committed without documentation. Then proceed to commit workflow.
 
 ```bash
 make clean-notebook-outputs
 make health
 make smoke-test
-# Step 4: Add learning comments to changed files (see above), then:
+# Step 4: Add learning comments to changed files (see above)
+# Step 5: Fully document all changed files (docstrings, READMEs, educational focus); then:
 ```
 
 **Commit workflow:**
@@ -204,6 +206,7 @@ make clean-notebook-outputs
 make health
 make smoke-test
 # Step 4: Review working tree (git diff); add learning comments (why/how) to changed files
+# Step 5: Fully document all changed files (educational docstrings, READMEs)
 
 # 3. Find and stage ALL changes
 git status

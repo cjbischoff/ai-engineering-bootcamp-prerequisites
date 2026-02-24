@@ -20,13 +20,14 @@ from qdrant_client import QdrantClient
 _QDRANT_CLIENT = QdrantClient(url="http://qdrant:6333")
 from pydantic import BaseModel
 import numpy as np
+import json
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from typing import Annotated, Any
 
 from operator import add
 from api.agents.agents import ToolCall, RAGUsedContext, agent_node, intent_router_node
 from langgraph.graph import StateGraph
-from api.agents.tools import get_formatted_context, get_formatted_reviews_context
+from api.agents.tools import get_formatted_items_context, get_formatted_reviews_context
 from api.agents.utils.utils import get_tool_descriptions
 from langgraph.graph import END, START
 from langgraph.prebuilt import ToolNode
@@ -68,7 +69,7 @@ workflow = StateGraph(State)
 
 # Week 4 multiple tools: agent can call product retrieval and/or reviews retrieval.
 # get_formatted_context = product descriptions; get_formatted_reviews_context = reviews filtered by item IDs.
-tools = [get_formatted_context, get_formatted_reviews_context]
+tools = [get_formatted_items_context, get_formatted_reviews_context]
 tool_node = ToolNode(tools)
 tool_descriptions = get_tool_descriptions(tools)
 
@@ -99,36 +100,80 @@ workflow.add_conditional_edges(
 workflow.add_edge("tool_node", "agent_node")
 
 
+def rag_agent_stream_wrapper(question: str, thread_id: str):
+    """
+    Stream LangGraph execution as SSE (Server-Sent Events) for real-time UI updates.
 
-# --- Execution: run_agent invokes graph; rag_agent_wrapper enriches for frontend ---
-def run_agent(question: str, thread_id: str) -> dict:
+    Yields two event types:
+    - Plain text: Human-readable status ("Analysing the question...", "Planning...",
+      "Looking for items: X.") for frontend status placeholder.
+    - JSON final_answer: {type, data: {answer, used_context, trace_id}} when graph completes.
+
+    Why SSE? Enables progressive feedback (user sees "Planning..." before answer) instead
+    of waiting for full response. Frontend consumes with fetch/EventSource or iter_lines().
+    """
+    def _string_for_sse(message: str):
+        """Format message as SSE line: 'data: {message}\\n\\n' (required by SSE spec)."""
+        return f"data: {message}\n\n"
+
+    def _process_graph_event(chunk):
+        def _is_node_start(chunk):
+            return chunk[1].get("type") == "task"
+
+        def _is_node_end(chunk):
+            return chunk[0] == "updates"
+
+        def _tool_to_text(tool_call):
+            if tool_call.name == "get_formatted_items_context":
+                return f"Looking for items: {tool_call.arguments.get('query', '')}."
+            elif tool_call.name == "get_formatted_reviews_context":
+                return "Fetching user reviews..."
+            else:
+                return f"Unknown tool: {tool_call.name}"
+
+        # Map graph node starts to user-facing status text (Week 4 streaming UX)
+        if _is_node_start(chunk):
+            if chunk[1].get("payload", {}).get("name") == "intent_router_node":
+                return "Analysing the question..."
+            elif chunk[1].get("payload", {}).get("name") == "agent_node":
+                return "Planning..."
+            elif chunk[1].get("payload", {}).get("name") == "tool_node":
+                payload = chunk[1].get("payload", {})
+                input_data = payload.get("input", {})
+                tool_calls = getattr(input_data, "tool_calls", []) if hasattr(input_data, "tool_calls") else input_data.get("tool_calls", [])
+                message = "".join([_tool_to_text(tc) for tc in tool_calls])
+                return message
+            else:
+                return False
+
     initial_state = {
         "messages": [{"role": "user", "content": question}],
         "iteration": 0,
         "available_tools": tool_descriptions,
     }
-    # LangGraph checkpointing: thread_id scopes saved state so multi-turn conversations
-    # resume correctly (same thread_id => same conversation history in Postgres).
-    config = {
-        "configurable": {
-            "thread_id": thread_id,
-        }
-    }
 
-    # Compile inside context so checkpointer is used for this run; PostgresSaver
-    # writes state after each step so we can resume/replay by thread_id.
+    config = {"configurable": {"thread_id": thread_id}}
     with PostgresSaver.from_conn_string("postgresql://langgraph_user:langgraph_password@postgres:5432/langgraph_db") as checkpointer:
         graph = workflow.compile(checkpointer=checkpointer)
-        result = graph.invoke(initial_state, config)
+        result = None
+        for chunk in graph.stream(
+            initial_state,
+            config=config,
+            stream_mode=["debug", "values"],
+        ):
+            process_chunk = _process_graph_event(chunk)
+            if process_chunk:
+                yield _string_for_sse(process_chunk)
 
-    return result
+            if chunk[0] == "values":
+                result = chunk[1]
 
+    # Graph may not produce values if it exits early (e.g. off-topic); surface error to frontend
+    if result is None:
+        yield _string_for_sse(json.dumps({"type": "error", "data": {"message": "No result from graph"}}))
+        return
 
-
-
-
-def rag_agent_wrapper(question, thread_id):
-    result = run_agent(question, thread_id)
+    # Enrich references with image_url and price from Qdrant (same as non-streaming wrapper)
     used_context = []
     dummy_vector = np.zeros(1536).tolist()
 
@@ -159,9 +204,11 @@ def rag_agent_wrapper(question, thread_id):
                 "description": item.description
             })
 
-    # trace_id from agent_node so frontend can POST feedback (thumbs/comment) to LangSmith (Week 4).
-    return {
-        "answer": result.get("answer", ""),
-        "used_context": used_context,
-        "trace_id": result.get("trace_id", "")
-    }
+    yield _string_for_sse(json.dumps({
+        "type": "final_answer",
+        "data": {
+            "answer": result.get("answer", ""),
+            "used_context": used_context,
+            "trace_id": result.get("trace_id", ""),
+        },
+    }))

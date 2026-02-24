@@ -3,10 +3,21 @@
 Smoke Test Script for AI Engineering Bootcamp RAG Pipeline
 
 Runs end-to-end test of the RAG pipeline to verify:
-- API endpoint responds correctly
-- Response structure matches Pydantic models
+- API endpoint responds correctly (streaming SSE)
+- Response structure matches Pydantic models (answer, used_context)
 - Product context includes required fields
 - Response time is acceptable
+
+STREAMING SUPPORT (Week 4 / Sprint 3):
+--------------------------------------
+The /rag/ endpoint returns text/event-stream (SSE) instead of JSON. Events:
+- Plain text: Status updates ("Analysing the question...", "Planning...", etc.)
+- JSON type=final_answer: Contains answer, used_context, trace_id
+- JSON type=error: Contains error message
+
+This script consumes the stream, parses SSE "data: " lines, and validates
+the final_answer payload. request_id comes from X-Request-ID response header
+(set by RequestIDMiddleware).
 
 Usage:
     make smoke-test          # Run with summary output
@@ -128,38 +139,65 @@ def run_smoke_test(query: str, verbose: bool = False) -> bool:
 
     all_passed = True
 
-    # Test 1: API responds
+    # Test 1: API responds (streaming SSE)
     try:
         start_time = time.time()
         # thread_id required by API (LangGraph checkpointing); fixed ID for reproducible smoke run.
+        # stream=True: API returns text/event-stream; we consume SSE events.
         response = requests.post(
             "http://localhost:8000/rag/",
             json={"query": query, "thread_id": "smoke-test"},
-            timeout=30
+            headers={"Accept": "text/event-stream"},
+            stream=True,
+            timeout=60,
         )
         elapsed = time.time() - start_time
 
-        if response.status_code == 200:
-            print_success(f"API responded with status 200 in {elapsed:.2f}s")
-        else:
+        if response.status_code != 200:
             print_failure(f"API returned status {response.status_code}")
-            print(f"Response: {response.text}")
+            print(f"Response: {response.text[:500]}")
             return False
+        print_success(f"API responded with status 200 in {elapsed:.2f}s")
 
     except requests.exceptions.ConnectionError:
         print_failure("Cannot connect to API (is it running?)")
         return False
     except requests.exceptions.Timeout:
-        print_failure("Request timed out (> 30 seconds)")
+        print_failure("Request timed out (> 60 seconds)")
         return False
     except Exception as e:
         print_failure(f"Error making request: {str(e)}")
         return False
 
-    # Test 2: Response is valid JSON
+    # Test 2: Consume SSE stream and extract final_answer
+    response_data = None
     try:
-        response_data = response.json()
-        print_success("Response is valid JSON")
+        request_id = response.headers.get("X-Request-ID", "unknown")
+        for line in response.iter_lines(decode_unicode=True):
+            if line and line.startswith("data: "):
+                data = line[6:].strip()
+                if not data:
+                    continue
+                try:
+                    parsed = json.loads(data)
+                    if isinstance(parsed, dict) and parsed.get("type") == "final_answer":
+                        payload = parsed.get("data", {})
+                        response_data = {
+                            "request_id": request_id,
+                            "answer": payload.get("answer", ""),
+                            "used_context": payload.get("used_context", []),
+                        }
+                        break
+                    if isinstance(parsed, dict) and parsed.get("type") == "error":
+                        err_msg = parsed.get("data", {}).get("message", "Unknown error")
+                        print_failure(f"Stream error: {err_msg}")
+                        return False
+                except json.JSONDecodeError:
+                    pass  # Plain text status (e.g. "Analysing the question...")
+        if response_data is None:
+            print_failure("No final_answer event in stream")
+            return False
+        print_success("Response is valid JSON (from SSE stream)")
     except Exception as e:
         print_failure(f"Response is not valid JSON: {str(e)}")
         return False

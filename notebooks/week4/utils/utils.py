@@ -1,4 +1,10 @@
-"""Utilities for parsing function definitions and docstrings (e.g. for tool schemas)."""
+"""
+Utilities for LangGraph multi-turn agents (Week 4 / Sprint 3).
+
+Same as week3/utils but used by Week 4 notebooks (multi-turn, multiple tools).
+format_ai_message with tool_call_id_prefix is critical for multi-turn: each
+conversation turn must use unique tool_call IDs to satisfy OpenAI API.
+"""
 
 import ast
 import inspect
@@ -7,13 +13,16 @@ from typing import Any, Dict
 from langchain_core.messages import AIMessage
 
 
-def format_ai_message(response):
-
+def format_ai_message(response, tool_call_id_prefix: str = "call"):
+    """
+    Format AgentResponse to AIMessage. Use unique prefix per turn for multi-turn.
+    Prevents OpenAI BadRequestError when tool_call IDs are reused across turns.
+    """
     if response.tool_calls:
         tool_calls = []
         for i, tc in enumerate(response.tool_calls):
             tool_calls.append({
-                "id": f"call_{i}",
+                "id": f"{tool_call_id_prefix}_{i}",
                 "name": tc.name,
                 "args": tc.arguments
             })

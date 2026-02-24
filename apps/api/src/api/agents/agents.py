@@ -106,7 +106,8 @@ def agent_node(state) -> dict:
 
 
     # Convert AgentResponse to AIMessage (with tool_calls if present) for LangGraph
-    ai_message = format_ai_message(response)
+    # tool_call_id_prefix: unique per turn to avoid OpenAI BadRequestError (Week 4 multi-turn)
+    ai_message = format_ai_message(response, tool_call_id_prefix=f"call_{state.iteration}")
 
     return {
         "messages": [ai_message],

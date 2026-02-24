@@ -17,7 +17,7 @@ apps/api/src/api/agents/utils/
 
 ### utils.py (Sprint 2 / Video 5)
 
-- **format_ai_message(response)**: Converts AgentResponse to AIMessage. Includes tool_calls when the agent wants to invoke tools. Required by LangGraph.
+- **format_ai_message(response, tool_call_id_prefix="call")**: Converts AgentResponse to AIMessage. tool_call_id_prefix ensures unique IDs per turn (call_0, call_1) for multi-turn; avoids OpenAI BadRequestError. Required by LangGraph.
 - **get_tool_descriptions(function_list)**: Parses function docstrings into tool schemas (name, description, parameters). Used as `available_tools` for the agent.
 
 ## Functions

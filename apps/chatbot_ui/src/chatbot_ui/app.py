@@ -40,6 +40,7 @@ import streamlit as st  # Streamlit framework for building the web UI
 from chatbot_ui.core.config import config  # Configuration (API_URL from .env)
 import uuid
 import logging
+import json
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -199,6 +200,41 @@ def api_call(method, url, **kwargs):
         # Could be: SSL errors, DNS resolution, malformed URLs, etc.
         _show_error_popup(f"An unexpected error occurred: {str(e)}")
         return False, {"message": str(e)}
+
+
+
+def api_call_stream(method, url, **kwargs):
+    """
+    Make streaming HTTP request to /rag/ endpoint (SSE).
+
+    Returns either:
+    - Iterator of bytes/str (response.iter_lines()) on success
+    - (False, {"message": "..."}) on error (connection, timeout, etc.)
+
+    WHY check isinstance(stream_result, tuple)? On error we return (False, dict)
+    instead of an iterator. Caller must check before iterating to avoid
+    'bool' object has no attribute 'decode' when looping over error tuple.
+    """
+    def _show_error_popup(message):
+        """Show error message as a popup in the top-right corner"""
+        st.session_state["error_popup"] = {
+            "visible": True,
+            "message": message,
+        }
+
+    try:
+        response = getattr(requests, method)(url, stream=True, **kwargs)
+        return response.iter_lines()
+    except requests.exceptions.ConnectionError:
+        _show_error_popup("Connection error. Please check your network connection.")
+        return False, {"message": "Connection error"}
+    except requests.exceptions.Timeout:
+        _show_error_popup("The request timed out. Please try again later.")
+        return False, {"message": "Request timeout"}
+    except Exception as e:
+        _show_error_popup(f"An unexpected error occurred: {str(e)}")
+        return False, {"message": str(e)}
+
 
 
 # =============================================================================
@@ -469,53 +505,70 @@ if prompt := st.chat_input("Hello! How can I assist you today?"):
     # 3. Call backend API and display assistant's response
     with st.chat_message("assistant"):
         session_id = get_session_id()  # Same ID across turns so backend can load/save conversation state
-        # Make POST request to RAG endpoint
-        # Educational: We're sending JSON: {"query": "user's question", "thread_id": "..."}
-        # API returns JSON: {"request_id": "...", "answer": "...", "used_context": [...]}
-        status, output = api_call(
-            "post",  # HTTP POST method
-            f"{config.API_URL}/rag",  # URL from config (e.g., "http://api:8000/rag")
-            json={"query": prompt, "thread_id": session_id}  # thread_id required for checkpointing (Week 4)
+
+        status_placeholder = st.empty()
+        message_placeholder = st.empty()
+        stream_result = api_call_stream(
+            "post",
+            f"{config.API_URL}/rag",
+            json={"query": prompt, "thread_id": session_id},
+            headers={"Accept": "text/event-stream"},
         )
-        # Educational: requests library automatically:
-        # - Sets Content-Type: application/json header
-        # - Converts dict to JSON string
-        # - Sends in request body
+        # On error, api_call_stream returns (False, {"message": "..."}) instead of an iterator
+        if isinstance(stream_result, tuple):
+            _status, err_data = stream_result
+            err_msg = err_data.get("message", "Request failed")
+            logger.warning("Stream request failed: %s", err_msg)
+            status_placeholder.error(err_msg)
+            answer = err_msg
+            st.session_state.used_context = []
+        else:
+            answer = None
+            for line in stream_result:
+                line_text = line.decode("utf-8") if isinstance(line, bytes) else str(line)
+                if line_text.startswith("data: "):
+                    data = line_text[6:]
+                    try:
+                        output = json.loads(data)
 
-        # Extract data from API response
-        # Educational: We assume API call succeeded (output has expected structure)
-        # Production code should check: if status: ... else: show error
-        answer = output["answer"]  # LLM's natural language response
-        used_context = output["used_context"]  # List of product dicts (Video 3 feature)
-        # Persist trace_id so feedback (thumbs/comment) can be sent to LangSmith for this run (Week 4).
-        trace_id = output.get("trace_id", "") or ""
-        st.session_state.trace_id = trace_id if trace_id else None
-        logger.info(
-            "RAG response: stored trace_id=%s (from output keys: %s)",
-            st.session_state.trace_id,
-            list(output.keys()),
-        )
+                        if output.get("type") == "error":
+                            answer = output.get("data", {}).get("message", "An error occurred")
+                            logger.warning("Stream error from backend: %s", answer)
+                            status_placeholder.error(answer)
+                            break
+                        if output.get("type") == "final_answer":
+                            answer = output["data"]["answer"]
+                            used_context = output["data"]["used_context"]
+                            trace_id = output["data"]["trace_id"]
 
-        # =============================================================================
-        # VIDEO 4: UPDATE SIDEBAR WITH NEW PRODUCTS
-        # =============================================================================
-        # Store products in session state so sidebar can display them
-        # Why here? We want sidebar to update immediately after getting API response
-        st.session_state.used_context = used_context
-        # Educational: This triggers sidebar to show products on next rerun (line 66-74)
-        # Sidebar code checks "if st.session_state.used_context:" and displays cards
+                            st.session_state.used_context = used_context
+                            st.session_state.trace_id = trace_id
 
-        # Display the LLM's answer in the chat
-        st.write(answer)
-        # Educational: st.write() is the Swiss Army knife of Streamlit
-        # It automatically formats based on data type:
-        # - String: displays as text
-        # - DataFrame: displays as table
-        # - Dict: displays as JSON
-        # - Plot: displays as chart
+                            st.session_state.latest_feedback = None
+                            st.session_state.show_feedback_box = False
+                            st.session_state.feedback_submission_status = None
 
-        # Add assistant's response to chat history
+                            status_placeholder.empty()
+                            message_placeholder.markdown(answer)
+                            logger.info("Received final_answer: trace_id=%s, used_context_len=%d", trace_id, len(used_context))
+                            break
+
+                    except json.JSONDecodeError:
+                        # Plain text status (not JSON): "Analysing the question...", "Planning...", etc.
+                        # Show in status_placeholder for progressive feedback (Week 4 streaming UX)
+                        status_text = data.strip()
+                        if status_text:
+                            logger.info("Stream status: %s", status_text)
+                            status_placeholder.markdown(f"*{status_text}*")
+                    
+
+
+
+        # Add assistant's response to chat history (single append; do not append inside final_answer block)
+        if answer is None:
+            answer = "No response received."
         st.session_state.messages.append({"role": "assistant", "content": answer})
+        logger.info("Appended assistant message to history (total=%d)", len(st.session_state.messages))
         # Educational: Now both user's question AND assistant's answer are in history
         # Next rerun will display them in the chat (see line 51-53)
 
