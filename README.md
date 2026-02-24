@@ -10,7 +10,8 @@ This repository contains prerequisite materials and a complete AI chatbot applic
 - **Docker Support**: Containerized deployment with Docker Compose
 - **Workspace Architecture**: Modular monorepo structure with `uv` package manager
 - **Jupyter Notebooks**: Interactive tutorials for LLM APIs, dataset exploration, RAG preprocessing, and LangGraph agents
-- **ReAct Agent**: LangGraph-based agent with retrieval tool, intent routing (Sprint 2)
+- **ReAct Agent**: LangGraph-based agent with retrieval tools, intent routing (Sprint 2)
+- **Sprint 3 / Week 4**: Multi-turn conversations (Postgres checkpointer), multiple tools (items + reviews), human feedback (LangSmith), MCP servers, SSE streaming for real-time UI
 
 ## Prerequisites
 
@@ -82,10 +83,10 @@ make health
 ```
 
 This checks:
-- Docker containers are running (api, streamlit-app, qdrant)
-- Ports are listening (8000, 8501, 6333)
-- Qdrant collection is loaded with documents
-- API is responding
+- Docker containers (api, streamlit-app, qdrant, postgres, items_mcp_server, reviews_mcp_server)
+- Ports (8000, 8501, 6333, 8001, 8002, 5433)
+- Qdrant collection and Postgres (LangGraph checkpointer)
+- API and MCP servers responding
 
 Run an end-to-end smoke test of the RAG pipeline:
 
@@ -142,9 +143,8 @@ make smoke-test-verbose
 ```
 
 **What it tests:**
-- ✓ API responds with status 200
-- ✓ Response is valid JSON
-- ✓ Response structure matches Pydantic models
+- ✓ API responds with status 200 (consumes SSE stream)
+- ✓ Response structure from final_answer event (answer, used_context)
 - ✓ Response time is acceptable (< 20 seconds)
 - ✓ Answer is generated
 - ✓ Product context includes images and prices
@@ -196,6 +196,21 @@ make smoke-test-verbose
    git commit -m "Your commit message"
    ```
 
+## Learning Journey & Local Documentation
+
+Each major area has its own README. Start here for deep dives:
+
+| Area | README | Topics |
+|------|--------|--------|
+| **Week 0** | [notebooks/week0/README.md](notebooks/week0/README.md) | LLM APIs (OpenAI, Groq, Google) |
+| **Week 1** | [notebooks/week1/README.md](notebooks/week1/README.md) | RAG preprocessing, vector DB |
+| **Week 2** | [notebooks/week2/README.md](notebooks/week2/README.md) | Hybrid search, reranking, prompts |
+| **Week 3** | [notebooks/week3/README.md](notebooks/week3/README.md) | LangGraph, ReAct agent |
+| **Week 4** | [notebooks/week4/README.md](notebooks/week4/README.md) | Multi-turn, MCP, streaming |
+| **API Agents** | [apps/api/src/api/agents/README.md](apps/api/src/api/agents/README.md) | Graph, tools, prompts |
+| **Scripts** | [scripts/README.md](scripts/README.md) | Health check, smoke test |
+| **MCP Servers** | [apps/items_mcp_server/README.md](apps/items_mcp_server/README.md), [apps/reviews_mcp_server/README.md](apps/reviews_mcp_server/README.md) | Model Context Protocol |
+
 ## Project Structure
 
 ```
@@ -209,6 +224,8 @@ make smoke-test-verbose
 │   │       └── core/
 │   │           └── config.py       # Configuration management
 │   │
+│   ├── items_mcp_server/           # MCP server for product retrieval (Week 4)
+│   ├── reviews_mcp_server/        # MCP server for review retrieval (Week 4)
 │   └── chatbot_ui/                 # Streamlit Frontend
 │       ├── Dockerfile
 │       ├── pyproject.toml
@@ -226,7 +243,8 @@ make smoke-test-verbose
 │   │   ├── 03-RAG-pipeline.ipynb            # RAG pipeline implementation
 │   │   └── 04-evaluation-dataset.ipynb      # Evaluation dataset creation
 │   ├── week2/                       # Advanced RAG (hybrid, rerank, prompts)
-│   └── week3/                       # LangGraph, ReAct agent
+│   ├── week3/                       # LangGraph, ReAct agent
+│   └── week4/                       # Multi-turn, MCP, streaming
 │
 ├── qdrant_storage/                 # Qdrant persistent storage (gitignored)
 ├── docker-compose.yml              # Multi-service orchestration

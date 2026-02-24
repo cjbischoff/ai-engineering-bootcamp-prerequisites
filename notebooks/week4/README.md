@@ -39,3 +39,10 @@ Week 4 builds on Week 3's LangGraph ReAct agent with:
 ## Utils
 
 `notebooks/week4/utils/utils.py` mirrors week3 utils with `format_ai_message` and `tool_call_id_prefix` for multi-turn tool call IDs.
+
+## Related
+
+- [../week3/README.md](../week3/README.md) - LangGraph intro, single-turn agent
+- [../../apps/api/src/api/agents/README.md](../../apps/api/src/api/agents/README.md) - Production graph, tools
+- [../../apps/items_mcp_server/README.md](../../apps/items_mcp_server/README.md) - Items MCP server
+- [../../apps/reviews_mcp_server/README.md](../../apps/reviews_mcp_server/README.md) - Reviews MCP server

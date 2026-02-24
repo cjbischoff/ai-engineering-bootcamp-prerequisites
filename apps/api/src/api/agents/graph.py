@@ -35,6 +35,9 @@ from langgraph.checkpoint.postgres import PostgresSaver  # Persist conversation 
 
 
 # --- State: shared across all nodes; add reducer appends messages and references ---
+# Learning: Annotated[list, add] means when a node returns {"messages": [x]}, LangGraph
+# appends x to state.messages instead of replacing. Same for references. Enables
+# multi-turn accumulation of conversation and product refs.
 class State(BaseModel):
     messages: Annotated[list[Any], add] = []
     question_relevant: bool = False
@@ -48,6 +51,7 @@ class State(BaseModel):
 
 def tool_router(state: State) -> str:
     """Conditional edge from agent_node: "tools" -> tool_node, "end" -> END."""
+    # iteration > 2: safety limit to prevent infinite agent<->tool loops (e.g. confused agent)
     if state.final_answer:
         return "end"
     elif state.iteration > 2:
@@ -177,6 +181,8 @@ def rag_agent_stream_wrapper(question: str, thread_id: str):
     used_context = []
     dummy_vector = np.zeros(1536).tolist()
 
+    # Enrich each reference: agent returns (id, description); we fetch image/price from Qdrant.
+    # dummy_vector: query_points needs a vector; we use filter by parent_asin so vector is unused.
     for item in result.get("references", []):
         payload = _QDRANT_CLIENT.query_points(
             collection_name="Amazon-items-collection-01-hybrid-search",

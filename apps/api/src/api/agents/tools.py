@@ -45,7 +45,8 @@ def retrieve_items_data(query, k=5):
     query_embedding = get_embedding(query)
     qdrant_client = QdrantClient(url="http://qdrant:6333")
 
-    # Qdrant query (hybrid search with RRF fusion)
+    # Qdrant hybrid search (Week 2 Video 5): dense + sparse (BM25) with RRF fusion.
+    # Prefetch retrieves from both vectors; FusionQuery merges by rank (scale-independent).
     results = qdrant_client.query_points(
         collection_name="Amazon-items-collection-01-hybrid-search",
         prefetch=[
@@ -126,7 +127,8 @@ def retrieve_reviews_data(query, item_list, k=5):
     query_embedding = get_embedding(query)
     qdrant_client = QdrantClient(url="http://qdrant:6333")
 
-    # Prefilter by parent_asin so we only search within reviews for the items the agent cares about.
+    # Prefilter by parent_asin: reviews collection stores (parent_asin, text); we only want
+    # reviews for items the agent already retrieved (Week 4 two-stage: items first, then reviews).
     results = qdrant_client.query_points(
         collection_name="Amazon-items-collection-01-reviews",
         prefetch=[

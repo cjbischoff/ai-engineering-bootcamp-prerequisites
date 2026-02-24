@@ -34,6 +34,9 @@ def _get_instructor_client():
 
 
 # --- Pydantic models for structured LLM outputs (Instructor enforces these schemas) ---
+# Learning: Instructor (instructor.from_openai) constrains the LLM to return JSON matching
+# these Pydantic models. Without it, the LLM might return free text; we need structured
+# tool_calls and references for the graph to route correctly.
 class ToolCall(BaseModel):
     """Tool call from agent: name + arguments. Agent returns these when it wants to use a tool."""
     name: str
@@ -80,6 +83,9 @@ def agent_node(state) -> dict:
     messages = state.messages
 
     # Convert LangGraph messages to OpenAI format for the LLM
+    # Learning: LangGraph stores AIMessage, ToolMessage, HumanMessage; OpenAI API expects
+    # {"role": "user"|"assistant"|"system", "content": "..."}. convert_to_openai_messages
+    # handles the translation (including tool_calls if present).
     conversation = []
 
     for message in messages:
