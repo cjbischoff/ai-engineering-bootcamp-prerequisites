@@ -76,6 +76,21 @@ smoke-test-postgres:
 	uv sync
 	uv run scripts/smoke_test_postgres.py
 
+# Target: setup-shopping-cart
+# Purpose: Create tools_database and shopping_carts schema (Week 5 bootcamp spec)
+# When to use: First-time setup before running week5 notebook
+setup-shopping-cart:
+	-docker compose exec -T postgres psql -U langgraph_user -d postgres -c "CREATE DATABASE tools_database"
+	docker compose exec -T postgres psql -U langgraph_user -d tools_database < scripts/sql/shopping_cart_table.sql
+
+# Target: smoke-test-shopping-cart
+# Purpose: Verify shopping cart schema, table, and columns exist (Week 5)
+# When to use: Before running week5 notebook or add_to_shopping_cart tool
+# Output: Schema, table, and column checks for shopping_carts.shopping_cart_items
+smoke-test-shopping-cart:
+	uv sync
+	uv run scripts/smoke_test_shopping_cart.py
+
 # Target: smoke-test-mcp
 # Purpose: Verify MCP servers (items_mcp_server, reviews_mcp_server) are up and responding
 # When to use: After starting Docker, when debugging MCP or Cursor tool use
