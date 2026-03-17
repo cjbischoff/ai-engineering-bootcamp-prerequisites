@@ -1,17 +1,16 @@
 """
-FastAPI Endpoints for RAG-based Product Q&A API
+FastAPI Endpoints for the LangGraph multi-agent RAG API (Sprint 2 / Video 5-6; Week 5).
 
-This module defines the REST API endpoints for the RAG system.
-Currently implements a single POST endpoint for answering product questions.
+Defines two routers:
+- agent router (prefix=/agent): POST /agent/ streams SSE from rag_agent_stream_wrapper.
+  Payload: query, thread_id. Yields status updates and final_answer JSON (answer,
+  used_context, trace_id, shopping_cart). thread_id enables LangGraph checkpointing.
+- feedback router (prefix=/submit_feedback): POST for LangSmith feedback (thumbs, comment).
+  Payload: trace_id, feedback_score, feedback_text. Used by frontend to attach feedback
+  to LangSmith runs for evaluation.
 
-API Structure:
-- Base path: /rag
-- Endpoint: POST /rag/ (note the trailing slash)
-- Request: JSON with query field
-- Response: JSON with request_id and answer fields
-
-The endpoint is organized using FastAPI's APIRouter pattern for modularity
-and future extensibility (e.g., adding /rag/health, /rag/feedback endpoints).
+Uses FastAPI APIRouter pattern for modularity. RequestIDMiddleware attaches request_id
+to request.state for tracing.
 """
 
 import logging
@@ -96,10 +95,9 @@ def rag(request: Request, payload: RAGRequest) -> StreamingResponse:
         - Add timeout to prevent long-running queries
         - Validate query length and content (prevent injection)
     """
-    # Sprint 2 / Video 6: ReAct agent replaces rag_pipeline_wrapper. Agent uses tools
-    # (get_formatted_context) to retrieve; rag_agent_wrapper enriches references with
-    # image_url and price from Qdrant (same response shape for frontend compatibility).
-    # thread_id: Required for LangGraph checkpointing (Week 4); same ID = same conversation.
+    # Week 5: LangGraph coordinator-based multi-agent. rag_agent_stream_wrapper runs
+    # coordinator -> product_qa_agent | shopping_cart_agent, streams SSE. thread_id
+    # enables PostgresSaver checkpointing (same ID = same conversation state).
 
 
     # Return structured response with request ID for tracing and enriched product context
@@ -177,5 +175,5 @@ api_router = APIRouter()
 #   - Scalability: Easy to add more routers (/admin, /analytics, etc.)
 #   - Documentation: Auto-generated OpenAPI docs group by tags
 #   - Versioning: Could create /v1/rag, /v2/rag routers separately
-api_router.include_router(rag_router, prefix="/rag", tags=["rag"])
+api_router.include_router(rag_router, prefix="/agent", tags=["agent"])
 api_router.include_router(feedback_router, prefix="/submit_feedback", tags=["feedback"])

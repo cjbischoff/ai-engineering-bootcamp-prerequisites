@@ -1,14 +1,26 @@
 """
-Retrieval tools for ReAct agent (Sprint 2 / Video 5-6; Week 4 multiple tools).
+Agent tools for the LangGraph multi-agent workflow (Sprint 2 / Video 5-6; Week 4-5).
 
-get_formatted_context: product descriptions (hybrid search on Amazon-items-collection-01-hybrid-search).
-get_formatted_reviews_context: customer reviews scoped by item IDs (Amazon-items-collection-01-reviews).
-Hides vector search behind tool use: agent decides when/what to retrieve.
+Product QA agent tools (retrieval):
+- get_formatted_items_context: Hybrid search on Amazon-items-collection-01-hybrid-search.
+  Returns formatted product descriptions (ID, rating, description) for the agent to answer questions.
+- get_formatted_reviews_context: Customer reviews from Amazon-items-collection-01-reviews,
+  scoped by item IDs. Two-stage: agent retrieves items first, then reviews for those items.
+
+Shopping cart agent tools (persistence in tools_database):
+- add_to_shopping_cart: Upsert items; fetches price/image from Qdrant by parent_asin.
+- get_shopping_cart: Returns cart items with total_price (price × quantity).
+- remove_from_cart: Delete item by product_id.
+
+All tools are @traceable for LangSmith observability. Agent decides when to call each tool.
 """
 import openai
 from langsmith import traceable, get_current_run_tree
 from qdrant_client import QdrantClient
-from qdrant_client.models import Prefetch, FusionQuery, Document, Filter, FieldCondition, MatchAny
+from qdrant_client.models import Prefetch, FusionQuery, Document, Filter, FieldCondition, MatchAny, MatchValue
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import numpy as np
 
 @traceable(
     name="embed_query",
@@ -112,7 +124,7 @@ def get_formatted_items_context(query: str, top_k: int = 5) -> str:
     Returns:
         A string of the top k context chunks with IDs and average ratings prepending each chunk, each representing an inventory item for a given query.
     """
-    context = retrieve_items_data(query, k=top_k)
+    context = retrieve_items_data(query, top_k)
     formatted_context = process_items_context(context)
     return formatted_context
 
@@ -186,15 +198,202 @@ def process_reviews_context(context):
 
 def get_formatted_reviews_context(query: str, item_list: list, top_k: int = 15) -> str:
     """
-    Get the top k reviews matching a query for a list of prefiltered items.
     Args:
         query: The query to get the top k reviews for
         item_list: The list of item IDs to prefilter for before running the query
         top_k: The number of reviews to retrieve, this should be at least 20 if multiple items are prefiltered
     Returns:
-        A string of the top k context chunks with IDs prepending each chunk, each representing a review for a given inventory item for a given query.
+        A string of the top k context chunks with IDs prepending each chunk, each representing a review for a given inventory
     """
-    context = retrieve_reviews_data(query, item_list, k=top_k)
-    # Must use process_reviews_context: retrieve_reviews_data returns no retrieved_context_ratings.
+    context = retrieve_reviews_data(query, item_list, top_k)
     formatted_context = process_reviews_context(context)
     return formatted_context
+
+
+
+@traceable(
+    name="add_to_shopping_cart",
+    run_type="tool"
+)
+def add_to_shopping_cart(items: list[dict], user_id: str, cart_id: str) -> str:
+    """Add a list of provided items to the shopping cart.
+
+    Args:
+        items: A list of items to add to the shopping cart. Each item is a dictionary with the following keys: product_id, quantity.
+        user_id: The id of the user to add the items to the shopping cart.
+        cart_id: The id of the shopping cart to add the items to.
+
+    Returns:
+        A confirmation message listing the items added to the shopping cart.
+    """
+    conn = psycopg2.connect(
+        host="postgres",
+        port=5432,
+        database="tools_database",
+        user="langgraph_user",
+        password="langgraph_password",
+    )
+    conn.autocommit = True
+
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        for item in items:
+            product_id = item["product_id"]
+            quantity = item["quantity"]
+
+            qdrant_client = QdrantClient(url="http://qdrant:6333")
+
+            # Qdrant lookup: Prefetch with filter by parent_asin (dummy_vector unused; filter does the work)
+            # Why Prefetch: hybrid-search collection expects prefetch; filter narrows to single product
+            dummy_vector = np.zeros(1536).tolist()
+            payload = qdrant_client.query_points(
+                collection_name="Amazon-items-collection-01-hybrid-search",
+                prefetch=[
+                    Prefetch(
+                        query=dummy_vector,
+                        filter=Filter(
+                            must=[
+                                FieldCondition(
+                                    key="parent_asin",
+                                    match=MatchValue(value=product_id),
+                                )
+                            ]
+                        ),
+                        using="text-embedding-3-small",
+                        limit=20,
+                    )
+                ],
+                query=FusionQuery(fusion="rrf"),
+                limit=1,
+            ).points[0].payload
+
+            product_image_url = payload.get("image")
+            price = payload.get("price")
+            currency = "USD"
+
+            # Upsert: check if (user_id, cart_id, product_id) exists; UPDATE quantity or INSERT
+            check_query = """
+            SELECT id, quantity, price
+            FROM shopping_carts.shopping_cart_items
+            WHERE user_id = %s AND shopping_cart_id = %s AND product_id = %s
+            """
+            cursor.execute(check_query, (user_id, cart_id, product_id))
+            existing_item = cursor.fetchone()
+
+            if existing_item:
+                # Update existing item
+                new_quantity = existing_item["quantity"] + quantity
+                update_query = """
+                UPDATE shopping_carts.shopping_cart_items
+                SET
+                    quantity = %s,
+                    price = %s,
+                    currency = %s,
+                    product_image_url = COALESCE(%s, product_image_url)
+                WHERE user_id = %s AND shopping_cart_id = %s AND product_id = %s
+                RETURNING id, quantity, price
+                """
+                cursor.execute(
+                    update_query,
+                    (
+                        new_quantity,
+                        price,
+                        currency,
+                        product_image_url,
+                        user_id,
+                        cart_id,
+                        product_id,
+                    ),
+                )
+            else:
+                # Insert new item
+                insert_query = """
+                INSERT INTO shopping_carts.shopping_cart_items (
+                    user_id, shopping_cart_id, product_id,
+                    price, quantity, currency, product_image_url
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, quantity, price
+                """
+                cursor.execute(
+                    insert_query,
+                    (
+                        user_id,
+                        cart_id,
+                        product_id,
+                        price,
+                        quantity,
+                        currency,
+                        product_image_url,
+                    ),
+                )
+
+    conn.close()
+    return f"Added {items} to the shopping cart."
+
+
+@traceable(
+    name="get_shopping_cart",
+    run_type="tool"
+)
+def get_shopping_cart(user_id: str, cart_id: str) -> list[dict]:
+    """Retrieve all items in a user's shopping cart.
+
+    Args:
+        user_id: User ID.
+        cart_id: Cart identifier.
+
+    Returns:
+        List of dictionaries containing cart items.
+    """
+    conn = psycopg2.connect(
+        host="postgres",
+        port=5432,
+        database="tools_database",
+        user="langgraph_user",
+        password="langgraph_password",
+    )
+    conn.autocommit = True
+
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        query = """
+        SELECT
+            product_id, price, quantity,
+            currency, product_image_url,
+            (price * quantity) as total_price
+        FROM shopping_carts.shopping_cart_items
+        WHERE user_id = %s AND shopping_cart_id = %s
+        ORDER BY added_at DESC
+        """
+        cursor.execute(query, (user_id, cart_id))
+        return [dict(row) for row in cursor.fetchall()]
+
+@traceable(
+    name="remove_from_cart",
+    run_type="tool"
+)
+def remove_from_cart(product_id: str, user_id: str, cart_id: str) -> bool:
+    """Remove an item completely from the shopping cart.
+
+    Args:
+        product_id: Product ID to remove.
+        user_id: User ID.
+        cart_id: Cart identifier.
+
+    Returns:
+        True if item was removed, False if item wasn't found.
+    """
+    conn = psycopg2.connect(
+        host="postgres",
+        port=5432,
+        database="tools_database",
+        user="langgraph_user",
+        password="langgraph_password",
+    )
+    conn.autocommit = True
+
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        query = """
+        DELETE FROM shopping_carts.shopping_cart_items
+        WHERE user_id = %s AND shopping_cart_id = %s AND product_id = %s
+        """
+        cursor.execute(query, (user_id, cart_id, product_id))
+        return cursor.rowcount > 0

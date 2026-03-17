@@ -10,37 +10,36 @@ This directory contains the production implementation of the RAG pipeline - a 5-
 
 ```
 apps/api/src/api/agents/
-├── __init__.py
-├── agents.py                    # ReAct agent_node, intent_router_node (Sprint 2)
-├── graph.py                     # StateGraph, rag_agent_stream_wrapper (SSE)
-├── tools.py                     # get_formatted_context retrieval tool
-├── retrieval_generation.py      # Original RAG pipeline (still used by evals)
+├── agents.py                    # product_qa_agent, shopping_cart_agent, coordinator_agent (Week 5)
+├── graph.py                     # StateGraph, rag_agent_stream_wrapper (SSE streaming)
+├── tools.py                     # Retrieval + shopping cart tools (Week 4-5)
+├── retrieval_generation.py      # Original linear RAG pipeline (still used by evals)
 ├── utils/
-│   ├── __init__.py
-│   ├── prompt_management.py     # Prompt loading utilities (Video 7)
-│   └── utils.py                 # format_ai_message, get_tool_descriptions
+│   ├── prompt_management.py    # YAML prompt loading (product_qa, shopping_cart, coordinator)
+│   └── utils.py                 # format_ai_message, get_tool_descriptions, messages_to_openai
 └── prompts/
-    ├── retrieval_generation.yaml  # RAG prompt (original pipeline)
-    ├── qa_agent.yaml             # ReAct agent prompt
-    └── intent_router_agent.yaml  # Intent router prompt
+    ├── product_qa_agent.yaml    # Product Q&A agent prompt
+    ├── shopping_cart_agent.yaml # Shopping cart agent prompt
+    ├── coordinator_agent.yaml   # Coordinator routing prompt
+    └── retrieval_generation.yaml # Original RAG prompt
 ```
 
-## ReAct Agent (Sprint 2 / Video 5–6)
+## Coordinator-Based Multi-Agent (Week 5)
 
-The `/rag/` endpoint uses a **LangGraph ReAct agent** instead of the linear RAG pipeline:
+The `/agent/` endpoint uses a **LangGraph coordinator** that delegates to specialist agents:
 
 ```
-START → intent_router_node → agent_node ⇄ tool_node → END
+START → coordinator_agent → product_qa_agent | shopping_cart_agent ⇄ tool_node → back to coordinator → END
 ```
 
-- **intent_router_node**: Filters irrelevant queries (<Question> not about products).
-- **agent_node**: LLM decides tool_calls or final_answer.
-- **tool_node**: Executes `get_formatted_items_context` and `get_formatted_reviews_context` (Week 4).
-- **tool_router**: Conditional edge: tools → tool_node, end → END.
+- **coordinator_agent**: Entry point. Plans tasks, routes to product_qa_agent (product questions) or shopping_cart_agent (cart add/remove/get). Returns to coordinator when done; coordinator may delegate again or end.
+- **product_qa_agent**: Answers product questions. Uses `get_formatted_items_context`, `get_formatted_reviews_context`. Loops with tool_node until final_answer.
+- **shopping_cart_agent**: Manages cart. Uses `add_to_shopping_cart`, `remove_from_cart`, `get_shopping_cart`. Loops with tool_node until final_answer.
+- **tools**: Product QA has retrieval tools; shopping cart has persistence tools (Postgres). Each agent has its own ToolNode.
 
-**Why hide retrieval behind a tool?** The agent can decide when to retrieve, handle multi-step queries, and avoid retrieval for off-topic questions.
+**How they work together:** Coordinator analyzes conversation, delegates to the right agent. Specialist runs until done, returns to coordinator. Coordinator decides next step (delegate again or end). State (messages, references, cart_id) flows through the graph.
 
-**Streaming (Week 4):** `rag_agent_stream_wrapper` yields SSE events: plain-text status updates ("Analysing...", "Planning...") and a JSON `final_answer` event with answer, used_context, trace_id.
+**Streaming:** `rag_agent_stream_wrapper` yields SSE: status updates ("Planning...", "Looking for items...") and `final_answer` JSON (answer, used_context, trace_id, shopping_cart).
 
 ## RAG Pipeline Workflow
 

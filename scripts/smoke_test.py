@@ -10,7 +10,7 @@ Runs end-to-end test of the RAG pipeline to verify:
 
 STREAMING SUPPORT (Week 4 / Sprint 3):
 --------------------------------------
-The /rag/ endpoint returns text/event-stream (SSE) instead of JSON. Events:
+The /agent/ endpoint returns text/event-stream (SSE) instead of JSON. Events:
 - Plain text: Status updates ("Analysing the question...", "Planning...", etc.)
 - JSON type=final_answer: Contains answer, used_context, trace_id
 - JSON type=error: Contains error message
@@ -145,7 +145,7 @@ def run_smoke_test(query: str, verbose: bool = False) -> bool:
         # thread_id required by API (LangGraph checkpointing); fixed ID for reproducible smoke run.
         # stream=True: API returns text/event-stream; we consume SSE events.
         response = requests.post(
-            "http://localhost:8000/rag/",
+            "http://localhost:8000/agent/",
             json={"query": query, "thread_id": "smoke-test"},
             headers={"Accept": "text/event-stream"},
             stream=True,

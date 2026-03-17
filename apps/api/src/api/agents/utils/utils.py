@@ -1,9 +1,37 @@
 """Agent utils: format_ai_message, get_tool_descriptions. Sprint 2 / Video 5; Week 4 multi-turn."""
 import ast
 import inspect
+import re
 from typing import Any
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, convert_to_openai_messages
+
+# OpenAI tool names must match ^[a-zA-Z0-9_-]+$ (no dots). LLM may return "functions.tool_name".
+_TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
+
+
+def _sanitize_tool_name(name: str) -> str:
+    """Strip invalid prefixes (e.g. functions.) so OpenAI accepts the name."""
+    if not name or _TOOL_NAME_PATTERN.match(name):
+        return name
+    if name.startswith("functions."):
+        return name[len("functions.") :]
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:64]
+
+
+def messages_to_openai(messages) -> list:
+    """Convert LangGraph messages to OpenAI format and sanitize tool names (checkpoint may have invalid names)."""
+    out = []
+    for message in messages:
+        converted = convert_to_openai_messages(message)
+        msgs = converted if isinstance(converted, list) else [converted]
+        for m in msgs:
+            if isinstance(m, dict) and "tool_calls" in m:
+                for tc in m["tool_calls"]:
+                    if isinstance(tc.get("function"), dict) and "name" in tc["function"]:
+                        tc["function"]["name"] = _sanitize_tool_name(tc["function"]["name"])
+            out.append(m)
+    return out
 
 
 def format_ai_message(response, tool_call_id_prefix: str = "call"):
@@ -18,7 +46,7 @@ def format_ai_message(response, tool_call_id_prefix: str = "call"):
         for i, tc in enumerate(response.tool_calls):
             tool_calls.append({
                 "id": f"{tool_call_id_prefix}_{i}",
-                "name": tc.name,
+                "name": _sanitize_tool_name(tc.name),
                 "args": tc.arguments
             })
 

@@ -15,10 +15,14 @@ apps/api/src/api/agents/utils/
 └── utils.py                       # Agent utilities (Sprint 2)
 ```
 
-### utils.py (Sprint 2 / Video 5)
+### utils.py (Sprint 2 / Video 5; Week 5)
 
-- **format_ai_message(response, tool_call_id_prefix="call")**: Converts AgentResponse to AIMessage. tool_call_id_prefix ensures unique IDs per turn (call_0, call_1) for multi-turn; avoids OpenAI BadRequestError. Required by LangGraph.
-- **get_tool_descriptions(function_list)**: Parses function docstrings into tool schemas (name, description, parameters). Used as `available_tools` for the agent.
+- **format_ai_message(response, tool_call_id_prefix="call")**: Converts AgentResponse to AIMessage. tool_call_id_prefix ensures unique IDs per turn (call_0, call_1) for multi-turn; avoids OpenAI BadRequestError. Required by LangGraph. Used by product_qa_agent and shopping_cart_agent.
+- **get_tool_descriptions(function_list)**: Parses function docstrings into tool schemas (name, description, parameters). Used as `available_tools` for each agent. graph.py calls this for product_qa_agent_tools and shopping_cart_agent_tools.
+- **messages_to_openai(messages)**: Converts LangGraph messages to OpenAI format; sanitizes tool names. Used by all three agents before LLM calls.
+- **_sanitize_tool_name(name)**: Strips invalid prefixes (e.g. functions.) so OpenAI accepts tool names. Used by graph.py's _tool_to_text for SSE status messages.
+
+**How they fit:** agents.py imports format_ai_message, messages_to_openai. graph.py imports prompt_management (indirectly via agents), utils._sanitize_tool_name, get_tool_descriptions. Tools are defined in tools.py; get_tool_descriptions parses their docstrings for the agent.
 
 ## Functions
 

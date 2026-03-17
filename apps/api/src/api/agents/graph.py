@@ -1,109 +1,174 @@
 """
-LangGraph ReAct agent workflow (Sprint 2 / Video 5-6).
+LangGraph coordinator-based multi-agent workflow (Sprint 2 / Video 5-6; Week 5).
 
-Defines StateGraph: START -> intent_router -> agent_node <-> tool_node -> END.
-- intent_router: Filters irrelevant queries (product/shopping = relevant; off-topic = not).
-- agent_node: LLM that decides tool_calls or final_answer.
-- tool_node: Executes get_formatted_context (retrieval tool).
-- tool_router: Conditional edge agent_node -> tools or end.
-run_agent() invokes the graph; rag_agent_wrapper() enriches result with images/prices.
+Defines StateGraph: START -> coordinator_agent -> (product_qa_agent | shopping_cart_agent)
+<-> tool_node -> back to coordinator. Flow:
+- coordinator_agent: Entry point; plans tasks and delegates to product_qa_agent or
+  shopping_cart_agent based on user intent.
+- product_qa_agent: Answers product questions; uses get_formatted_items_context,
+  get_formatted_reviews_context. Loops with tool_node until final_answer.
+- shopping_cart_agent: Handles cart add/remove/get. Loops with tool_node until final_answer.
+- Both agents return to coordinator when done; coordinator may delegate again or end.
 
-rag_agent_wrapper behavior:
-- used_context: Include every referenced product (image_url/price may be None) so API
-  and smoke test get at least one product when the agent retrieves; matches rag_pipeline_wrapper.
-- answer: Prefer state.answer; fallback to last assistant message content; if still empty
-  but we have references, build a short summary so the response is never empty when products exist.
+rag_agent_stream_wrapper: Streams graph execution as SSE. Enriches references with
+image_url/price from Qdrant. Yields status updates ("Planning...", "Looking for items...")
+and final_answer JSON with answer, used_context, trace_id, shopping_cart.
 """
 from qdrant_client import QdrantClient
+import qdrant_client
 
 # Reuse client across requests (avoids per-request connection overhead)
 _QDRANT_CLIENT = QdrantClient(url="http://qdrant:6333")
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import numpy as np
 import json
 from qdrant_client.models import Filter, FieldCondition, MatchValue
-from typing import Annotated, Any
+from typing import Annotated, Any, Dict, List
 
 from operator import add
-from api.agents.agents import ToolCall, RAGUsedContext, agent_node, intent_router_node
+from langsmith import traceable, get_current_run_tree
+from api.agents.agents import Delegation, ToolCall, RAGUsedContext, product_qa_agent, shopping_cart_agent, coordinator_agent
 from langgraph.graph import StateGraph
-from api.agents.tools import get_formatted_items_context, get_formatted_reviews_context
-from api.agents.utils.utils import get_tool_descriptions
+from api.agents.tools import get_formatted_items_context, get_formatted_reviews_context, add_to_shopping_cart, remove_from_cart, get_shopping_cart
+from api.agents.utils.utils import _sanitize_tool_name, get_tool_descriptions
 from langgraph.graph import END, START
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.postgres import PostgresSaver  # Persist conversation state per thread (Week 4 multi-turn)
 
 
-# --- State: shared across all nodes; add reducer appends messages and references ---
-# Learning: Annotated[list, add] means when a node returns {"messages": [x]}, LangGraph
-# appends x to state.messages instead of replacing. Same for references. Enables
-# multi-turn accumulation of conversation and product refs.
-class State(BaseModel):
-    messages: Annotated[list[Any], add] = []
-    question_relevant: bool = False
+class AgentProperties(BaseModel):
+    """Per-agent state: iteration count, final_answer flag, tool_calls from LLM."""
     iteration: int = 0
-    answer: str = ""
-    available_tools: list[dict[str, Any]] = []
-    tool_calls: list[ToolCall] = []
     final_answer: bool = False
-    references: Annotated[list[RAGUsedContext], add] = []
-    trace_id: str = ""
+    available_tools: List[Dict[str, Any]] = []
+    tool_calls: List[ToolCall] = []
 
-def tool_router(state: State) -> str:
-    """Conditional edge from agent_node: "tools" -> tool_node, "end" -> END."""
-    # iteration > 2: safety limit to prevent infinite agent<->tool loops (e.g. confused agent)
-    if state.final_answer:
+class CoordinatorAgentProperties(BaseModel):
+    """Coordinator state: plan (delegations), next_agent to route to."""
+    iteration: int = 0
+    final_answer: bool = False
+    plan: List[Delegation] = []
+    next_agent: str = ""
+
+class State(BaseModel):
+    """Graph state. Annotated[List, add] reducers append (messages, references) across nodes."""
+    messages: Annotated[List[Any], add] = []
+    user_intent: str = ""
+    product_qa_agent: AgentProperties = Field(default_factory=AgentProperties)
+    shopping_cart_agent: AgentProperties = Field(default_factory=AgentProperties)
+    coordinator_agent: CoordinatorAgentProperties = Field(default_factory=CoordinatorAgentProperties)
+    answer: str = ""
+    references: Annotated[List[RAGUsedContext], add] = []
+    user_id: str = ""
+    cart_id: str = ""
+
+
+def product_qa_agent_tool_edge(state) -> str:
+    """Route: product_qa_agent -> tools (if tool_calls) or end (if final_answer or max iterations)."""
+    if state.product_qa_agent.final_answer:
         return "end"
-    elif state.iteration > 2:
+    elif state.product_qa_agent.iteration > 4:
         return "end"
-    elif len(state.tool_calls) > 0:
+    elif len(state.product_qa_agent.tool_calls) > 0:
         return "tools"
     else:
         return "end"
 
-def intent_router_conditional_edges(state: State) -> str:
-    """Routes from intent_router: agent_node if relevant, END otherwise."""
-    if state.question_relevant:
-        return "agent_node"
+def shopping_cart_agent_tool_edge(state) -> str:
+    """Route: shopping_cart_agent -> tools (if tool_calls) or end (if final_answer or max iterations)."""
+    if state.shopping_cart_agent.final_answer:
+        return "end"
+    elif state.shopping_cart_agent.iteration > 2:
+        return "end"
+    elif len(state.shopping_cart_agent.tool_calls) > 0:
+        return "tools"
     else:
         return "end"
 
-# --- Build graph: nodes + edges (Video 5 pattern) ---
+
+def coordinator_agent_edge(state):
+    """Route: coordinator_agent -> product_qa_agent, shopping_cart_agent, or end."""
+    if state.coordinator_agent.iteration > 3:
+        return "end"
+    elif state.coordinator_agent.final_answer and len(state.coordinator_agent.plan) == 0:
+        return "end"
+    elif state.coordinator_agent.next_agent == "product_qa_agent":
+        return "product_qa_agent"
+    elif state.coordinator_agent.next_agent == "shopping_cart_agent":
+        return "shopping_cart_agent"
+    else:
+        return "end"
+
+
+# --- Workflow: build StateGraph with coordinator-based routing ---
 workflow = StateGraph(State)
 
-# Week 4 multiple tools: agent can call product retrieval and/or reviews retrieval.
-# get_formatted_context = product descriptions; get_formatted_reviews_context = reviews filtered by item IDs.
-tools = [get_formatted_items_context, get_formatted_reviews_context]
-tool_node = ToolNode(tools)
-tool_descriptions = get_tool_descriptions(tools)
+# Product QA agent: retrieval tools for answering product questions
+product_qa_agent_tools = [get_formatted_items_context, get_formatted_reviews_context]
+product_qa_agent_tool_node = ToolNode(product_qa_agent_tools)
+product_qa_agent_tool_descriptions = get_tool_descriptions(product_qa_agent_tools)
 
-workflow.add_node("agent_node", agent_node)
-workflow.add_node("tool_node", tool_node)
-workflow.add_node("intent_router_node", intent_router_node)
+# Shopping cart agent: cart CRUD tools
+shopping_cart_agent_tools = [add_to_shopping_cart, remove_from_cart, get_shopping_cart]
+shopping_cart_agent_tool_node = ToolNode(shopping_cart_agent_tools)
+shopping_cart_agent_tool_descriptions = get_tool_descriptions(shopping_cart_agent_tools)
 
-workflow.add_edge(START, "intent_router_node")
+# Add nodes
+workflow.add_node("product_qa_agent", product_qa_agent)
+workflow.add_node("shopping_cart_agent", shopping_cart_agent)
+
+workflow.add_node("coordinator_agent", coordinator_agent)
+
+workflow.add_node("product_qa_agent_tool_node", product_qa_agent_tool_node)
+workflow.add_node("shopping_cart_agent_tool_node", shopping_cart_agent_tool_node)
+
+
+# Edges: START -> coordinator; coordinator conditionally routes to agents or END
+workflow.add_edge(START, "coordinator_agent")
 
 workflow.add_conditional_edges(
-    "intent_router_node",
-    intent_router_conditional_edges,
+    "coordinator_agent",
+    coordinator_agent_edge,
     {
-        "agent_node": "agent_node",
+        "product_qa_agent": "product_qa_agent",
+        "shopping_cart_agent": "shopping_cart_agent",
         "end": END
     }
 )
 
 workflow.add_conditional_edges(
-    "agent_node",
-    tool_router,
+    "product_qa_agent",
+    product_qa_agent_tool_edge,
     {
-        "tools": "tool_node",
-        "end": END
+        "tools": "product_qa_agent_tool_node",
+        "end": "coordinator_agent"
     }
 )
 
-workflow.add_edge("tool_node", "agent_node")
+workflow.add_conditional_edges(
+    "shopping_cart_agent",
+    shopping_cart_agent_tool_edge,
+    {
+        "tools": "shopping_cart_agent_tool_node",
+        "end": "coordinator_agent"
+    }
+)
+
+# Tool nodes loop back to their agent for next LLM call
+workflow.add_edge("product_qa_agent_tool_node", "product_qa_agent")
+workflow.add_edge("shopping_cart_agent_tool_node", "shopping_cart_agent")
 
 
+
+
+
+
+
+
+
+
+
+@traceable(name="LangGraph", run_type="chain")
 def rag_agent_stream_wrapper(question: str, thread_id: str):
     """
     Stream LangGraph execution as SSE (Server-Sent Events) for real-time UI updates.
@@ -128,35 +193,75 @@ def rag_agent_stream_wrapper(question: str, thread_id: str):
             return chunk[0] == "updates"
 
         def _tool_to_text(tool_call):
-            if tool_call.name == "get_formatted_items_context":
-                return f"Looking for items: {tool_call.arguments.get('query', '')}."
-            elif tool_call.name == "get_formatted_reviews_context":
+            raw = tool_call.get("name", "?") if isinstance(tool_call, dict) else getattr(tool_call, "name", "?")
+            name = _sanitize_tool_name(raw) if isinstance(raw, str) else raw
+            args = tool_call.get("arguments", {}) if isinstance(tool_call, dict) else getattr(tool_call, "arguments", {}) or {}
+            if name == "get_formatted_items_context":
+                return f"Looking for items: {args.get('query', '')}."
+            elif name == "get_formatted_reviews_context":
                 return "Fetching user reviews..."
+            elif name == "add_to_shopping_cart":
+                return "Adding items to cart..."
+            elif name == "remove_from_cart":
+                return "Removing item from cart..."
+            elif name == "get_shopping_cart":
+                return "Fetching cart..."
             else:
-                return f"Unknown tool: {tool_call.name}"
+                return f"Unknown tool: {name}"
 
         # Map graph node starts to user-facing status text (Week 4 streaming UX)
         if _is_node_start(chunk):
-            if chunk[1].get("payload", {}).get("name") == "intent_router_node":
-                return "Analysing the question..."
-            elif chunk[1].get("payload", {}).get("name") == "agent_node":
+            name = chunk[1].get("payload", {}).get("name")
+            if name == "coordinator_agent":
                 return "Planning..."
-            elif chunk[1].get("payload", {}).get("name") == "tool_node":
+            elif name == "product_qa_agent":
+                return "Analyzing the question..."
+            elif name == "shopping_cart_agent":
+                return "Managing cart..."
+            elif name in ("product_qa_agent_tool_node", "shopping_cart_agent_tool_node"):
                 payload = chunk[1].get("payload", {})
                 input_data = payload.get("input", {})
-                tool_calls = getattr(input_data, "tool_calls", []) if hasattr(input_data, "tool_calls") else input_data.get("tool_calls", [])
+                # input_data can be State (Pydantic) or dict; State has no .get()
+                if isinstance(input_data, dict):
+                    agent_key = "product_qa_agent" if name == "product_qa_agent_tool_node" else "shopping_cart_agent"
+                    tool_calls = input_data.get(agent_key, {}).get("tool_calls", [])
+                else:
+                    agent = getattr(input_data, "product_qa_agent" if name == "product_qa_agent_tool_node" else "shopping_cart_agent", None)
+                    tool_calls = getattr(agent, "tool_calls", []) if agent else []
                 message = "".join([_tool_to_text(tc) for tc in tool_calls])
                 return message
             else:
                 return False
 
+    qdrant_client = QdrantClient(url="http://qdrant:6333")
+
+
     initial_state = {
         "messages": [{"role": "user", "content": question}],
-        "iteration": 0,
-        "available_tools": tool_descriptions,
+        "user_id": thread_id,
+        "cart_id": thread_id,
+        "product_qa_agent": {
+            "iteration": 0,
+            "final_answer": False,
+            "available_tools": product_qa_agent_tool_descriptions,
+            "tool_calls": []
+        },
+        "shopping_cart_agent": {
+            "iteration": 0,
+            "final_answer": False,
+            "available_tools": shopping_cart_agent_tool_descriptions,
+            "tool_calls": []
+        },
+        "coordinator_agent": {
+            "iteration": 0,
+            "final_answer": False,
+            "plan": [],
+            "next_agent": ""
+        }
     }
-
     config = {"configurable": {"thread_id": thread_id}}
+
+
     with PostgresSaver.from_conn_string("postgresql://langgraph_user:langgraph_password@postgres:5432/langgraph_db") as checkpointer:
         graph = workflow.compile(checkpointer=checkpointer)
         result = None
@@ -210,11 +315,38 @@ def rag_agent_stream_wrapper(question: str, thread_id: str):
                 "description": item.description
             })
 
+    answer = result.get("answer", "")
+    if not answer and used_context:
+        answer = "Here are the recommended products based on your query."
+
+    # LangSmith: root run ID for feedback. State has no trace_id; get from active trace.
+    trace_id = ""
+    current_run = get_current_run_tree()
+    if current_run:
+        root = current_run
+        while root and root.parent_run:
+            root = root.parent_run
+        trace_id = str(root.id) if root else ""
+
+    shopping_cart = get_shopping_cart(thread_id, thread_id)
+    shopping_cart_items = [
+        {
+            "price": float(item.get("price")) if item.get("price") else None,
+            "quantity": item.get("quantity"),
+            "currency": item.get("currency"),
+            "product_image_url": item.get("product_image_url"),
+            "total_price": float(item.get("total_price")) if item.get("total_price") else None,
+        }
+        for item in shopping_cart
+    ]
+
     yield _string_for_sse(json.dumps({
         "type": "final_answer",
         "data": {
-            "answer": result.get("answer", ""),
+            "answer": answer,
             "used_context": used_context,
-            "trace_id": result.get("trace_id", ""),
+            "trace_id": trace_id,
+            "shopping_cart": shopping_cart_items
+
         },
     }))

@@ -15,16 +15,20 @@ This directory stores externalized prompt templates introduced in Week 2 / Video
 
 ```
 apps/api/src/api/agents/prompts/
-├── retrieval_generation.yaml      # RAG prompt (original pipeline)
-├── qa_agent.yaml                 # ReAct agent prompt (Sprint 2)
-├── intent_router_agent.yaml      # Intent router prompt (Sprint 2)
+├── retrieval_generation.yaml      # RAG prompt (original linear pipeline)
+├── product_qa_agent.yaml         # Product Q&A agent (Week 5)
+├── shopping_cart_agent.yaml     # Shopping cart agent (Week 5)
+├── coordinator_agent.yaml       # Coordinator routing prompt (Week 5)
 └── README.md                     # This file
 ```
 
-### Sprint 2 Additions
+### Week 5 Multi-Agent Prompts
 
-- **qa_agent.yaml**: Instructions for the ReAct agent (tool-calling format, available_tools, final_answer rules).
-- **intent_router_agent.yaml**: Intent classification (question_relevant true/false).
+- **product_qa_agent.yaml**: Instructions for product Q&A. Tool-calling format, available_tools (get_formatted_items_context, get_formatted_reviews_context), final_answer rules, references output.
+- **shopping_cart_agent.yaml**: Instructions for cart operations. Tools: add_to_shopping_cart, remove_from_cart, get_shopping_cart. Receives user_id, cart_id from context.
+- **coordinator_agent.yaml**: Instructions for the coordinator. Plans tasks, delegates to product_qa_agent or shopping_cart_agent. Returns next_agent and plan.
+
+**How they work together:** Coordinator loads coordinator_agent.yaml; product_qa_agent loads product_qa_agent.yaml; shopping_cart_agent loads shopping_cart_agent.yaml. Agents use prompt_template_config() in prompt_management.py.
 
 ## File Structure: retrieval_generation.yaml
 
