@@ -7,6 +7,7 @@ Agent tools that persist state to PostgreSQL (tools_database). Builds on Week 4 
 - **01-Shopping-Cart-Agent-Tools.ipynb**: Three tools—add, get, remove—for a shopping cart backed by `shopping_carts.shopping_cart_items` in `tools_database`.
 - **02-Shopping-Cart-Agent.ipynb**: Multi-agent workflow with intent router (product_qa | shopping_cart | other), product_qa_agent (retrieval tools), and shopping_cart_agent (cart tools). Uses PostgresSaver for state persistence.
 - **03-Coordinator-Agent.ipynb**: Coordinator-based multi-agent workflow. Entry point is coordinator_agent (not intent_router); routes to product_qa_agent or shopping_cart_agent and loops back until done.
+- **04-Warehouse-Agent-Database.ipynb**: Prepares synthetic warehouse inventory for the warehouse agent. Fetches product IDs from Qdrant, generates availability per warehouse, and bulk-inserts into `warehouses.inventory`. Run `scripts/sql/warehouse_management.sql` first.
 
 ## Key Concepts
 
@@ -36,6 +37,7 @@ make smoke-test-shopping-cart  # Verify schema/table/columns
 | `01-Shopping-Cart-Agent-Tools.ipynb` | Notebook with add/get/remove tools |
 | `02-Shopping-Cart-Agent.ipynb` | Multi-agent workflow: intent router + product_qa + shopping_cart |
 | `03-Coordinator-Agent.ipynb` | Coordinator-based workflow: coordinator_agent routes to product_qa/shopping_cart |
+| `04-Warehouse-Agent-Database.ipynb` | Synthetic inventory generation and bulk insert into warehouses.inventory |
 | `utils/utils.py` | format_ai_message, get_tool_descriptions (shared with Week 4) |
 | `utils/tools.py` | get_formatted_items_context, get_formatted_reviews_context, get_shopping_cart, add_to_shopping_cart, remove_from_cart |
 
@@ -73,4 +75,5 @@ make smoke-test-shopping-cart  # Verify schema/table/columns
 ## Related
 
 - Schema: `scripts/sql/shopping_cart_table.sql`
+- Warehouse schema: `scripts/sql/warehouse_management.sql` (warehouses.inventory)
 - Smoke test: `scripts/smoke_test_shopping_cart.py`
