@@ -7,6 +7,7 @@ Agent tools that persist state to PostgreSQL (tools_database). Shopping cart (01
 - **01-Shopping-Cart-Agent-Tools.ipynb**: Three tools—add, get, remove—for a shopping cart backed by `shopping_carts.shopping_cart_items` in `tools_database`.
 - **02-Shopping-Cart-Agent.ipynb**: Multi-agent workflow with intent router (product_qa | shopping_cart | other), product_qa_agent (retrieval tools), and shopping_cart_agent (cart tools). Uses PostgresSaver for state persistence.
 - **03-Coordinator-Agent.ipynb**: Coordinator-based multi-agent workflow. Entry point is coordinator_agent (not intent_router); routes to product_qa_agent or shopping_cart_agent and loops back until done.
+- **06-Warehouse-Manager-Agent.ipynb**: Extends 03 with warehouse_manager_agent. Coordinator routes to product_qa, shopping_cart, or warehouse_manager. Full flow: product search → reviews → add to cart → reserve in warehouse.
 - **04-Warehouse-Agent-Database.ipynb**: Prepares synthetic warehouse inventory for the warehouse agent. Fetches product IDs from Qdrant, generates availability per warehouse, and bulk-inserts into `warehouses.inventory`. Run `scripts/sql/warehouse_management.sql` first.
 - **05-Warehouse-Agent-Tools.ipynb**: Warehouse agent tools—`check_warehouse_availability` (query inventory across warehouses) and `reserve_warehouse_items` (transactional reservation with `FOR UPDATE`). Requires `warehouses.inventory` populated (run 04 first).
 
@@ -61,22 +62,21 @@ Then run `04-Warehouse-Agent-Database.ipynb` to populate `warehouses.inventory`.
 | `03-Coordinator-Agent.ipynb` | Coordinator-based workflow: coordinator_agent routes to product_qa/shopping_cart |
 | `04-Warehouse-Agent-Database.ipynb` | Synthetic inventory generation and bulk insert into warehouses.inventory |
 | `05-Warehouse-Agent-Tools.ipynb` | check_warehouse_availability and reserve_warehouse_items tools |
+| `06-Warehouse-Manager-Agent.ipynb` | Full coordinator workflow: product_qa + shopping_cart + warehouse_manager |
 | `utils/utils.py` | format_ai_message, get_tool_descriptions (shared with Week 4) |
-| `utils/tools.py` | get_formatted_items_context, get_formatted_reviews_context, get_shopping_cart, add_to_shopping_cart, remove_from_cart |
+| `utils/tools.py` | get_formatted_items_context, get_formatted_reviews_context, get_shopping_cart, add_to_shopping_cart, remove_from_cart, check_warehouse_availability, reserve_warehouse_items |
 
 ## Troubleshooting
 
 ### LangSmith: "keys must be str, int, float, bool or None, not function"
 
-**Affected:** `03-Coordinator-Agent.ipynb` only. `02-Shopping-Cart-Agent.ipynb` does not show this error.
+**Affected:** `03-Coordinator-Agent.ipynb` and `06-Warehouse-Manager-Agent.ipynb`. `02-Shopping-Cart-Agent.ipynb` does not show this error (uses intent_router).
 
-**Cause:** The error occurs in `LangChainTracer.on_chain_end` when the tracer serializes the graph state for LangSmith. It is triggered by the **coordinator_agent** node. 02-Shopping-Cart-Agent does not use coordinator_agent (it uses intent_router as entry point), so the tracer never hits the problematic path. In 03-Coordinator-Agent, coordinator_agent is the entry point and runs repeatedly; when its state (with `CoordinatorAgentProperties` and `Annotated[List, add]` reducers) is serialized, a function (the `add` reducer) ends up in a structure that JSON cannot serialize.
+**Cause:** The coordinator_agent return used `coordinator_agent: {` (unquoted variable) as the dict key. In Python, that evaluates to the function object, so the key became a function. LangSmith serializes state for tracing; JSON cannot use functions as keys.
 
-**Workarounds:**
+**Fix:** Use `"coordinator_agent": {` (quoted string) in the return statement. Both 03 and 06 have been corrected.
 
-1. Disable LangSmith tracing for the run: `LANGSMITH_TRACING=false` (or equivalent).
-2. Upgrade LangSmith/LangChain packages in case a fix exists in newer versions.
-3. Report the issue upstream if it persists after upgrading.
+**If error persists:** Disable LangSmith tracing: `LANGSMITH_TRACING=false`.
 
 ### coordinator_agent_edge: AttributeError
 
