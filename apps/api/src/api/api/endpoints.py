@@ -1,16 +1,20 @@
 """
-FastAPI Endpoints for the LangGraph multi-agent RAG API (Sprint 2 / Video 5-6; Week 5).
+FastAPI Endpoints for the LangGraph multi-agent RAG API (Sprint 2–4; Week 4–5).
 
 Defines two routers:
-- agent router (prefix=/agent): POST /agent/ streams SSE from rag_agent_stream_wrapper.
-  Payload: query, thread_id. Yields status updates and final_answer JSON (answer,
-  used_context, trace_id, shopping_cart). thread_id enables LangGraph checkpointing.
-- feedback router (prefix=/submit_feedback): POST for LangSmith feedback (thumbs, comment).
-  Payload: trace_id, feedback_score, feedback_text. Used by frontend to attach feedback
-  to LangSmith runs for evaluation.
 
-Uses FastAPI APIRouter pattern for modularity. RequestIDMiddleware attaches request_id
-to request.state for tracing.
+- **Agent router** (``prefix=/agent``): ``POST /agent/`` streams SSE from
+  ``rag_agent_stream_wrapper`` in ``graph.py``. Payload: ``query``, ``thread_id``.
+  The compiled graph is **coordinator-first** (Sprint 4): delegates to product QA,
+  shopping cart, or **warehouse manager** agents—each with its own ``ToolNode``.
+  Yields status lines then ``final_answer`` JSON: ``answer``, ``used_context``,
+  ``trace_id``, ``shopping_cart``. ``thread_id`` scopes ``PostgresSaver`` checkpoints
+  and doubles as default ``user_id`` / ``cart_id`` in agent state.
+
+- **Feedback router** (``prefix=/submit_feedback``): POST for LangSmith human feedback
+  (thumbs score + optional comment). Frontend sends ``trace_id`` from the last run.
+
+Uses ``APIRouter`` for modularity. ``RequestIDMiddleware`` sets ``request_id`` for logs.
 """
 
 import logging
@@ -95,9 +99,9 @@ def rag(request: Request, payload: RAGRequest) -> StreamingResponse:
         - Add timeout to prevent long-running queries
         - Validate query length and content (prevent injection)
     """
-    # Week 5: LangGraph coordinator-based multi-agent. rag_agent_stream_wrapper runs
-    # coordinator -> product_qa_agent | shopping_cart_agent, streams SSE. thread_id
-    # enables PostgresSaver checkpointing (same ID = same conversation state).
+    # Week 5 + Sprint 4: coordinator -> product_qa_agent | shopping_cart_agent
+    # | warehouse_manager_agent; each specialist has its own ToolNode. SSE stream;
+    # thread_id = PostgresSaver scope + default cart/session keys.
 
 
     # Return structured response with request ID for tracing and enriched product context

@@ -12,6 +12,7 @@ This repository contains prerequisite materials and a complete AI chatbot applic
 - **Jupyter Notebooks**: Interactive tutorials for LLM APIs, dataset exploration, RAG preprocessing, and LangGraph agents
 - **ReAct Agent**: LangGraph-based agent with retrieval tools, intent routing (Sprint 2)
 - **Sprint 3 / Week 4**: Multi-turn conversations (Postgres checkpointer), multiple tools (items + reviews), human feedback (LangSmith), MCP servers, SSE streaming for real-time UI
+- **Sprint 4 / Week 5**: Coordinator multi-agent with **shopping cart** and **warehouse** tools (Postgres `tools_database`), dedicated ToolNodes per specialist, operational logging; `/agent/` SSE + LangSmith feedback unchanged for the UI
 
 ## Prerequisites
 
@@ -3327,6 +3328,20 @@ START → intent_router_node → agent_node ⇄ tool_node → END
 - **rag_agent_wrapper**: Enriches references with images/prices (same response shape as before)
 
 **Architecture:** See [apps/api/src/api/agents/README.md](apps/api/src/api/agents/README.md)
+
+## Week 5: Coordinator, cart & warehouse (Sprint 4)
+
+Week 5 notebooks build **shopping cart** and **warehouse inventory** agents on Postgres; Sprint 4 **lands the same patterns in the FastAPI app** so Streamlit talks to one production graph.
+
+**Notebook learning path:** [notebooks/week5/README.md](notebooks/week5/README.md) (01–06: cart tools → coordinator → warehouse DB → warehouse tools → full coordinator + warehouse).
+
+### Sprint 4 / Video 8: Backend parity
+
+- **Notebook reference:** `notebooks/week5/06-Warehouse-Manager-Agent.ipynb` (coordinator routes to `product_qa_agent`, `shopping_cart_agent`, `warehouse_manager_agent`).
+- **Production code:** `apps/api/src/api/agents/` — `graph.py` (StateGraph, three specialist ToolNodes, `rag_agent_stream_wrapper`), `agents.py` (Instructor + `convert_to_openai_messages`), `tools.py` (cart + `check_warehouse_availability` / `reserve_warehouse_items` using `host=postgres`), `prompts/*.yaml`.
+- **API:** `POST /agent/` still streams SSE (`answer`, `used_context`, `trace_id`, `shopping_cart`); enrichment and Qdrant lookups behave like earlier sprints.
+
+**Schemas:** `scripts/sql/shopping_cart_table.sql`, `scripts/sql/warehouse_management.sql` · **Deep dive:** [apps/api/src/api/agents/README.md](apps/api/src/api/agents/README.md)
 
 ## API Endpoints
 

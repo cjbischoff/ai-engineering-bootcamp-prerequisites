@@ -97,8 +97,22 @@ Then run `04-Warehouse-Agent-Database.ipynb` to populate `warehouses.inventory`.
 
 **Fix:** Use `graph.invoke()` when you need the final answer. It runs the full graph to completion and returns the final state with `answer` populated.
 
+## Production backend (Sprint 4 / Video 8)
+
+The same coordinator + three specialists pattern from **06-Warehouse-Manager-Agent.ipynb** is implemented under **`apps/api/src/api/agents/`** for the Streamlit app:
+
+| Notebook concept | Production module |
+|------------------|-------------------|
+| `State`, `PostgresSaver`, conditional edges | `graph.py` |
+| `coordinator_agent`, specialists, Instructor | `agents.py` |
+| Cart + warehouse tool functions | `tools.py` (use Docker hostname **`postgres`**, not `localhost`) |
+| YAML system prompts | `prompts/coordinator_agent.yaml`, `shopping_cart_agent.yaml`, `warehouse_manager_agent.yaml`, etc. |
+
+Pre-merge checklist: keep this README and [apps/api/src/api/agents/README.md](../../apps/api/src/api/agents/README.md) aligned when you change either side.
+
 ## Related
 
 - Shopping cart schema: `scripts/sql/shopping_cart_table.sql`
 - Warehouse schema: `scripts/sql/warehouse_management.sql`
 - Smoke test: `scripts/smoke_test_shopping_cart.py`
+- Agent package README: `apps/api/src/api/agents/README.md`
