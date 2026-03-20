@@ -1,39 +1,49 @@
-"""
-LangGraph coordinator-based multi-agent workflow (Sprint 2 / Video 5-6; Week 5).
+"""LangGraph coordinator-based multi-agent workflow (Sprint 2 / Video 5-6; Week 5).
 
-Defines StateGraph: START -> coordinator_agent -> (product_qa_agent | shopping_cart_agent)
-<-> tool_node -> back to coordinator. Flow:
-- coordinator_agent: Entry point; plans tasks and delegates to product_qa_agent or
-  shopping_cart_agent based on user intent.
-- product_qa_agent: Answers product questions; uses get_formatted_items_context,
-  get_formatted_reviews_context. Loops with tool_node until final_answer.
-- shopping_cart_agent: Handles cart add/remove/get. Loops with tool_node until final_answer.
-- Both agents return to coordinator when done; coordinator may delegate again or end.
+Defines a ``StateGraph``:
 
-rag_agent_stream_wrapper: Streams graph execution as SSE. Enriches references with
-image_url/price from Qdrant. Yields status updates ("Planning...", "Looking for items...")
-and final_answer JSON with answer, used_context, trace_id, shopping_cart.
+- **START → coordinator_agent** then conditional route to one of **product_qa_agent**,
+  **shopping_cart_agent**, or **warehouse_manager_agent**.
+- Each specialist **loops** with its own ``ToolNode`` (retrieval, cart Postgres, or warehouse
+  Postgres) until ``final_answer`` or a safety **max iteration** edge sends the flow to
+  ``END`` or back to the coordinator.
+
+**Warehouse path:** ``check_warehouse_availability`` / ``reserve_warehouse_items`` mutate
+``warehouses.inventory`` (see ``scripts/sql/warehouse_management.sql``).
+
+**rag_agent_stream_wrapper:** Streams as SSE for Streamlit—maps LangGraph ``debug`` events
+to short status strings, then emits ``final_answer`` JSON. After the graph completes, walks
+``references`` and **enriches** them from Qdrant (image/price), which produces extra Qdrant
+traffic in logs even after routing to ``END``.
+
+**Persistence:** ``PostgresSaver`` (``langgraph_db``) checkpoints thread state; cart/warehouse
+data live in ``tools_database`` (see ``tools.py`` connection kwargs).
+
+Logging at INFO: edges, stream lifecycle, warehouse tool names—pairs with ``agents.py`` logs.
 """
 from qdrant_client import QdrantClient
 import qdrant_client
 
-# Reuse client across requests (avoids per-request connection overhead)
+# Docker Compose service name (not localhost)—same pattern as Week 2 RAG in containers.
 _QDRANT_CLIENT = QdrantClient(url="http://qdrant:6333")
 from pydantic import BaseModel, Field
-import numpy as np
 import json
+import logging
+import numpy as np
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 from typing import Annotated, Any, Dict, List
 
 from operator import add
 from langsmith import traceable, get_current_run_tree
-from api.agents.agents import Delegation, ToolCall, RAGUsedContext, product_qa_agent, shopping_cart_agent, coordinator_agent
+from api.agents.agents import Delegation, ToolCall, RAGUsedContext, product_qa_agent, shopping_cart_agent, coordinator_agent, warehouse_manager_agent
 from langgraph.graph import StateGraph
-from api.agents.tools import get_formatted_items_context, get_formatted_reviews_context, add_to_shopping_cart, remove_from_cart, get_shopping_cart
+from api.agents.tools import get_formatted_items_context, get_formatted_reviews_context, add_to_shopping_cart, remove_from_cart, get_shopping_cart, check_warehouse_availability, reserve_warehouse_items
 from api.agents.utils.utils import _sanitize_tool_name, get_tool_descriptions
 from langgraph.graph import END, START
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.postgres import PostgresSaver  # Persist conversation state per thread (Week 4 multi-turn)
+
+logger = logging.getLogger(__name__)
 
 
 class AgentProperties(BaseModel):
@@ -56,6 +66,7 @@ class State(BaseModel):
     user_intent: str = ""
     product_qa_agent: AgentProperties = Field(default_factory=AgentProperties)
     shopping_cart_agent: AgentProperties = Field(default_factory=AgentProperties)
+    warehouse_manager_agent: AgentProperties = Field(default_factory=AgentProperties)
     coordinator_agent: CoordinatorAgentProperties = Field(default_factory=CoordinatorAgentProperties)
     answer: str = ""
     references: Annotated[List[RAGUsedContext], add] = []
@@ -65,65 +76,131 @@ class State(BaseModel):
 
 def product_qa_agent_tool_edge(state) -> str:
     """Route: product_qa_agent -> tools (if tool_calls) or end (if final_answer or max iterations)."""
-    if state.product_qa_agent.final_answer:
-        return "end"
-    elif state.product_qa_agent.iteration > 4:
-        return "end"
-    elif len(state.product_qa_agent.tool_calls) > 0:
-        return "tools"
+    a = state.product_qa_agent
+    n = len(a.tool_calls)
+    if a.final_answer:
+        dest, reason = "end", "final_answer"
+    elif a.iteration > 4:
+        dest, reason = "end", "max_iterations"
+    elif n > 0:
+        dest, reason = "tools", "has_tool_calls"
     else:
-        return "end"
+        dest, reason = "end", "no_tool_calls"
+    logger.info(
+        "graph edge product_qa_agent_tool_edge -> %s (%s) iteration=%s final_answer=%s tool_calls=%s",
+        dest,
+        reason,
+        a.iteration,
+        a.final_answer,
+        n,
+    )
+    return dest
+
 
 def shopping_cart_agent_tool_edge(state) -> str:
     """Route: shopping_cart_agent -> tools (if tool_calls) or end (if final_answer or max iterations)."""
-    if state.shopping_cart_agent.final_answer:
-        return "end"
-    elif state.shopping_cart_agent.iteration > 2:
-        return "end"
-    elif len(state.shopping_cart_agent.tool_calls) > 0:
-        return "tools"
+    a = state.shopping_cart_agent
+    n = len(a.tool_calls)
+    if a.final_answer:
+        dest, reason = "end", "final_answer"
+    elif a.iteration > 2:
+        dest, reason = "end", "max_iterations"
+    elif n > 0:
+        dest, reason = "tools", "has_tool_calls"
     else:
-        return "end"
+        dest, reason = "end", "no_tool_calls"
+    logger.info(
+        "graph edge shopping_cart_agent_tool_edge -> %s (%s) iteration=%s final_answer=%s tool_calls=%s",
+        dest,
+        reason,
+        a.iteration,
+        a.final_answer,
+        n,
+    )
+    return dest
+
+
+def warehouse_manager_agent_tool_edge(state) -> str:
+    """Route: warehouse_manager_agent -> tools (if tool_calls) or end (if final_answer or max iterations).
+
+    **Order matters:** We branch on ``final_answer`` and max iterations *before* ``tool_calls``.
+    If we capped iterations *before* checking ``n > 0``, the model could emit tool_calls on
+    the last step and the graph would skip the ToolNode—leading to OpenAI 400s (assistant
+    message with tool_calls but no following tool messages).
+    """
+    a = state.warehouse_manager_agent
+    n = len(a.tool_calls)
+    if a.final_answer:
+        dest, reason = "end", "final_answer"
+    elif a.iteration > 2:
+        dest, reason = "end", "max_iterations"
+    elif n > 0:
+        dest, reason = "tools", "has_tool_calls"
+    else:
+        dest, reason = "end", "no_tool_calls"
+    logger.info(
+        "graph edge warehouse_manager_agent_tool_edge -> %s (%s) iteration=%s final_answer=%s tool_calls=%s",
+        dest,
+        reason,
+        a.iteration,
+        a.final_answer,
+        n,
+    )
+    return dest
 
 
 def coordinator_agent_edge(state):
     """Route: coordinator_agent -> product_qa_agent, shopping_cart_agent, or end."""
-    if state.coordinator_agent.iteration > 3:
-        return "end"
-    elif state.coordinator_agent.final_answer and len(state.coordinator_agent.plan) == 0:
-        return "end"
-    elif state.coordinator_agent.next_agent == "product_qa_agent":
-        return "product_qa_agent"
-    elif state.coordinator_agent.next_agent == "shopping_cart_agent":
-        return "shopping_cart_agent"
+    c = state.coordinator_agent
+    if c.iteration > 3:
+        dest, reason = "end", "max_iterations"
+    elif c.final_answer and len(c.plan) == 0:
+        dest, reason = "end", "final_answer_empty_plan"
+    elif c.next_agent == "product_qa_agent":
+        dest, reason = "product_qa_agent", "delegate"
+    elif c.next_agent == "shopping_cart_agent":
+        dest, reason = "shopping_cart_agent", "delegate"
+    elif c.next_agent == "warehouse_manager_agent":
+        dest, reason = "warehouse_manager_agent", "delegate"
     else:
-        return "end"
+        dest, reason = "end", "no_next_agent"
+    logger.info(
+        "graph edge coordinator_agent_edge -> %s (%s) iteration=%s final_answer=%s plan_len=%s next_agent=%r",
+        dest,
+        reason,
+        c.iteration,
+        c.final_answer,
+        len(c.plan),
+        c.next_agent,
+    )
+    return dest
 
 
 # --- Workflow: build StateGraph with coordinator-based routing ---
+# Each specialist has its own ToolNode so executed tools match the last specialist that ran.
+# Specialist conditional edges: "tools" -> ToolNode -> same specialist; "end" -> coordinator_agent.
 workflow = StateGraph(State)
 
-# Product QA agent: retrieval tools for answering product questions
 product_qa_agent_tools = [get_formatted_items_context, get_formatted_reviews_context]
 product_qa_agent_tool_node = ToolNode(product_qa_agent_tools)
 product_qa_agent_tool_descriptions = get_tool_descriptions(product_qa_agent_tools)
 
-# Shopping cart agent: cart CRUD tools
 shopping_cart_agent_tools = [add_to_shopping_cart, remove_from_cart, get_shopping_cart]
 shopping_cart_agent_tool_node = ToolNode(shopping_cart_agent_tools)
 shopping_cart_agent_tool_descriptions = get_tool_descriptions(shopping_cart_agent_tools)
 
-# Add nodes
+warehouse_manager_agent_tools = [check_warehouse_availability, reserve_warehouse_items]
+warehouse_manager_agent_tool_node = ToolNode(warehouse_manager_agent_tools)
+warehouse_manager_agent_tool_descriptions = get_tool_descriptions(warehouse_manager_agent_tools)
+
 workflow.add_node("product_qa_agent", product_qa_agent)
 workflow.add_node("shopping_cart_agent", shopping_cart_agent)
-
+workflow.add_node("warehouse_manager_agent", warehouse_manager_agent)
 workflow.add_node("coordinator_agent", coordinator_agent)
 
 workflow.add_node("product_qa_agent_tool_node", product_qa_agent_tool_node)
 workflow.add_node("shopping_cart_agent_tool_node", shopping_cart_agent_tool_node)
-
-
-# Edges: START -> coordinator; coordinator conditionally routes to agents or END
+workflow.add_node("warehouse_manager_agent_tool_node", warehouse_manager_agent_tool_node)
 workflow.add_edge(START, "coordinator_agent")
 
 workflow.add_conditional_edges(
@@ -132,6 +209,7 @@ workflow.add_conditional_edges(
     {
         "product_qa_agent": "product_qa_agent",
         "shopping_cart_agent": "shopping_cart_agent",
+        "warehouse_manager_agent": "warehouse_manager_agent",
         "end": END
     }
 )
@@ -153,15 +231,18 @@ workflow.add_conditional_edges(
         "end": "coordinator_agent"
     }
 )
+workflow.add_conditional_edges(
+    "warehouse_manager_agent",
+    warehouse_manager_agent_tool_edge,
+    {
+        "tools": "warehouse_manager_agent_tool_node",
+        "end": "coordinator_agent"
+    }
+)
 
-# Tool nodes loop back to their agent for next LLM call
 workflow.add_edge("product_qa_agent_tool_node", "product_qa_agent")
 workflow.add_edge("shopping_cart_agent_tool_node", "shopping_cart_agent")
-
-
-
-
-
+workflow.add_edge("warehouse_manager_agent_tool_node", "warehouse_manager_agent")
 
 
 
@@ -206,6 +287,10 @@ def rag_agent_stream_wrapper(question: str, thread_id: str):
                 return "Removing item from cart..."
             elif name == "get_shopping_cart":
                 return "Fetching cart..."
+            elif name == "check_warehouse_availability":
+                return "Checking warehouse availability..."
+            elif name == "reserve_warehouse_items":
+                return "Reserving warehouse stock..."
             else:
                 return f"Unknown tool: {name}"
 
@@ -218,23 +303,40 @@ def rag_agent_stream_wrapper(question: str, thread_id: str):
                 return "Analyzing the question..."
             elif name == "shopping_cart_agent":
                 return "Managing cart..."
-            elif name in ("product_qa_agent_tool_node", "shopping_cart_agent_tool_node"):
+            elif name == "warehouse_manager_agent":
+                return "Managing warehouse..."
+            elif name in (
+                "product_qa_agent_tool_node",
+                "shopping_cart_agent_tool_node",
+                "warehouse_manager_agent_tool_node",
+            ):
                 payload = chunk[1].get("payload", {})
                 input_data = payload.get("input", {})
-                # input_data can be State (Pydantic) or dict; State has no .get()
+                if name == "product_qa_agent_tool_node":
+                    agent_key = "product_qa_agent"
+                elif name == "shopping_cart_agent_tool_node":
+                    agent_key = "shopping_cart_agent"
+                else:
+                    agent_key = "warehouse_manager_agent"
                 if isinstance(input_data, dict):
-                    agent_key = "product_qa_agent" if name == "product_qa_agent_tool_node" else "shopping_cart_agent"
                     tool_calls = input_data.get(agent_key, {}).get("tool_calls", [])
                 else:
-                    agent = getattr(input_data, "product_qa_agent" if name == "product_qa_agent_tool_node" else "shopping_cart_agent", None)
+                    agent = getattr(input_data, agent_key, None)
                     tool_calls = getattr(agent, "tool_calls", []) if agent else []
+                if name == "warehouse_manager_agent_tool_node":
+                    names = []
+                    for tc in tool_calls:
+                        raw = tc.get("name", "?") if isinstance(tc, dict) else getattr(tc, "name", "?")
+                        names.append(_sanitize_tool_name(raw) if isinstance(raw, str) else raw)
+                    logger.info(
+                        "graph stream warehouse_manager_agent_tool_node tool_calls=%s thread_id=%s",
+                        names,
+                        thread_id,
+                    )
                 message = "".join([_tool_to_text(tc) for tc in tool_calls])
                 return message
             else:
                 return False
-
-    qdrant_client = QdrantClient(url="http://qdrant:6333")
-
 
     initial_state = {
         "messages": [{"role": "user", "content": question}],
@@ -252,6 +354,12 @@ def rag_agent_stream_wrapper(question: str, thread_id: str):
             "available_tools": shopping_cart_agent_tool_descriptions,
             "tool_calls": []
         },
+        "warehouse_manager_agent": {
+            "iteration": 0,
+            "final_answer": False,
+            "available_tools": warehouse_manager_agent_tool_descriptions,
+            "tool_calls": []
+        },
         "coordinator_agent": {
             "iteration": 0,
             "final_answer": False,
@@ -261,6 +369,12 @@ def rag_agent_stream_wrapper(question: str, thread_id: str):
     }
     config = {"configurable": {"thread_id": thread_id}}
 
+    q_preview = (question or "").replace("\n", " ")[:120]
+    logger.info(
+        "langgraph stream start thread_id=%s question_preview=%r",
+        thread_id,
+        q_preview + ("…" if len(question or "") > 120 else ""),
+    )
 
     with PostgresSaver.from_conn_string("postgresql://langgraph_user:langgraph_password@postgres:5432/langgraph_db") as checkpointer:
         graph = workflow.compile(checkpointer=checkpointer)
@@ -270,6 +384,13 @@ def rag_agent_stream_wrapper(question: str, thread_id: str):
             config=config,
             stream_mode=["debug", "values"],
         ):
+            if chunk[0] == "debug" and isinstance(chunk[1], dict):
+                dbg = chunk[1]
+                if dbg.get("type") == "task":
+                    tname = dbg.get("payload", {}).get("name")
+                    if tname:
+                        logger.debug("langgraph task start name=%s thread_id=%s", tname, thread_id)
+
             process_chunk = _process_graph_event(chunk)
             if process_chunk:
                 yield _string_for_sse(process_chunk)
@@ -279,6 +400,7 @@ def rag_agent_stream_wrapper(question: str, thread_id: str):
 
     # Graph may not produce values if it exits early (e.g. off-topic); surface error to frontend
     if result is None:
+        logger.warning("langgraph stream finished with no values chunk thread_id=%s", thread_id)
         yield _string_for_sse(json.dumps({"type": "error", "data": {"message": "No result from graph"}}))
         return
 
@@ -327,6 +449,15 @@ def rag_agent_stream_wrapper(question: str, thread_id: str):
         while root and root.parent_run:
             root = root.parent_run
         trace_id = str(root.id) if root else ""
+
+    logger.info(
+        "langgraph stream done thread_id=%s trace_id=%s references=%s used_context=%s answer_len=%s",
+        thread_id,
+        trace_id or "-",
+        len(result.get("references", [])),
+        len(used_context),
+        len(answer or ""),
+    )
 
     shopping_cart = get_shopping_cart(thread_id, thread_id)
     shopping_cart_items = [

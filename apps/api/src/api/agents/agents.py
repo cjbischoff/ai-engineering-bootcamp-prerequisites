@@ -1,32 +1,67 @@
-"""
-ReAct Agent nodes for the LangGraph multi-agent workflow (Sprint 2 / Video 5-6; Week 5).
+"""ReAct Agent nodes for the LangGraph multi-agent workflow (Sprint 2 / Video 5-6; Week 5).
 
-Implements three LLM nodes invoked by the coordinator-based graph in graph.py:
-- product_qa_agent: Answers product questions using retrieval tools (get_formatted_items_context,
-  get_formatted_reviews_context). Returns tool_calls when it needs to search; final_answer when done.
-- shopping_cart_agent: Manages cart operations (add, remove, get) using cart tools. Receives
-  user_id/cart_id from state for multi-session support.
-- coordinator_agent: Entry point that plans tasks and delegates to product_qa_agent or
-  shopping_cart_agent. Routes based on user intent (product questions vs cart actions).
+Implements LLM **nodes** invoked by the coordinator-based graph in ``graph.py``:
 
-Uses Instructor for structured outputs (Pydantic models). Each agent returns tool_calls,
-final_answer, and agent-specific fields. LangSmith @traceable decorators enable observability.
+- **product_qa_agent**: Product Q&A using retrieval tools (``get_formatted_items_context``,
+  ``get_formatted_reviews_context``). Emits ``tool_calls`` until it can set ``final_answer``.
+- **shopping_cart_agent**: Cart add/remove/get via Postgres tools; ``user_id`` / ``cart_id``
+  come from graph state (typically equal to ``thread_id`` for the Streamlit session).
+- **warehouse_manager_agent**: Warehouse availability and reservation (Week 5 capstone path).
+  Tools hit ``warehouses.inventory``; see ``tools.py`` and ``scripts/sql/warehouse_management.sql``.
+- **coordinator_agent**: Entry planner. Chooses ``next_agent`` and a ``plan``; when it has a
+  direct reply (e.g. off-topic), it sets ``final_answer`` and may append an ``AIMessage``.
+
+**Message shaping:** Each node builds OpenAI-style message dicts with
+``langchain_core.messages.convert_to_openai_messages`` per LangChain message. That keeps
+tool call / tool result pairs in the shape the chat API expects (and avoids subtle bugs
+from hand-rolled history).
+
+**Structured outputs:** ``instructor`` constrains completions to Pydantic models (tool_calls,
+final_answer, references, etc.) so the graph can route deterministically.
+
+**Observability:** ``@traceable`` sends spans to LangSmith; ``logging`` INFO lines summarize
+each node output for Docker logs (iteration, tools, coordinator message tail types).
+
+Course refs: Week 5 notebooks (coordinator, cart, warehouse), Sprint 2 multi-agent videos.
 """
+import logging
 import instructor
 from pathlib import Path
 from typing import List
 
 from jinja2 import Template
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, convert_to_openai_messages
 from langsmith import traceable,get_current_run_tree
 from openai import OpenAI
 
 from api.agents.utils.prompt_management import prompt_template_config
-from api.agents.utils.utils import format_ai_message, messages_to_openai
+from api.agents.utils.utils import format_ai_message
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 # Path to prompts dir; uses __file__ so it works in both local and Docker (Video 6 fix)
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+
+
+def _summarize_messages_for_log(messages) -> str:
+    """Build a short, privacy-safe summary of recent chat history for logs.
+
+    We log only *types* (e.g. user, ai, tool) and roles, never message bodies. That is
+    enough to verify ordering: an ``ai`` message with ``tool_calls`` should be followed by
+    ``tool`` messages before the next ``ai`` turn—otherwise the provider returns 400.
+    """
+    if not messages:
+        return "n=0"
+    parts = []
+    for m in messages[-6:]:
+        t = getattr(m, "type", None)
+        if t is None and isinstance(m, dict):
+            t = m.get("role")
+        if t is None:
+            t = type(m).__name__
+        parts.append(str(t))
+    return f"n={len(messages)} tail=[{'|'.join(parts)}]"
 
 # Lazy-initialized instructor client (defers API key check to first request)
 _instructor_client = None
@@ -80,7 +115,16 @@ class CoordinatorAgentResponse(BaseModel):
     final_answer: bool = False
     answer: str = ""
 
+class WarehouseManagerAgentResponse(BaseModel):
+    """Instructor schema for the warehouse specialist (same shape as other ReAct agents).
 
+    The model must call ``check_warehouse_availability`` before ``reserve_warehouse_items``
+    (enforced by prompt + evaluation, not by this class). ``references`` are omitted here
+    because this agent does not emit product QA-style citation lists.
+    """
+    answer: str = Field(description="The answer to the question")
+    tool_calls: List[ToolCall] = []
+    final_answer: bool = False
 
 
 
@@ -90,7 +134,7 @@ class CoordinatorAgentResponse(BaseModel):
 @traceable(
     name="product_qa_agent",
     run_type="llm",
-    metadata={"ls_provider": "openai", "ls_model_name": "gpt-4.1-mini"}
+    metadata={"ls_provider": "openai", "ls_model_name": "gpt-4.1"}
 )
 def product_qa_agent(state) -> dict:
     """
@@ -102,12 +146,13 @@ def product_qa_agent(state) -> dict:
 
     messages = state.messages
 
-    conversation = messages_to_openai(messages)
+    # One OpenAI-format dict per LangChain message (handles tool_calls + ToolMessage correctly).
+    conversation = [convert_to_openai_messages(m) for m in messages]
 
     client = instructor.from_openai(OpenAI())
 
     response, raw_response = client.chat.completions.create_with_completion(
-        model="gpt-4.1-mini",
+        model="gpt-4.1",
         response_model=ProductQAAgentResponse,
         messages=[{"role": "system", "content": prompt}, *conversation],
         temperature=0.5,
@@ -125,6 +170,16 @@ def product_qa_agent(state) -> dict:
 
 
     ai_message = format_ai_message(response)
+    tool_names = [tc.name for tc in response.tool_calls]
+    # INFO for docker-compose: correlates with graph edge logs and LangSmith spans.
+    logger.info(
+        "agent product_qa_agent out iteration=%s final_answer=%s tool_calls=%s tools=%s references=%s",
+        state.product_qa_agent.iteration + 1,
+        response.final_answer,
+        len(response.tool_calls),
+        tool_names,
+        len(response.references),
+    )
 
     return {
         "messages": [ai_message],
@@ -142,7 +197,7 @@ def product_qa_agent(state) -> dict:
 @traceable(
     name="shopping_cart_agent",
     run_type="llm",
-    metadata={"ls_provider": "openai", "ls_model_name": "gpt-4.1-mini"}
+    metadata={"ls_provider": "openai", "ls_model_name": "gpt-4.1"}
 )
 def shopping_cart_agent(state) -> dict:
     """
@@ -160,18 +215,37 @@ def shopping_cart_agent(state) -> dict:
         cart_id=state.cart_id
     )
 
-    conversation = messages_to_openai(state.messages)
+    messages = state.messages
+    conversation = [convert_to_openai_messages(m) for m in messages]
 
     client = instructor.from_openai(OpenAI())
 
     response, raw_response = client.chat.completions.create_with_completion(
-        model="gpt-4.1-mini",
+        model="gpt-4.1",
         response_model=ShoppingCartAgentResponse,
         messages=[{"role": "system", "content": prompt}, *conversation],
         temperature=0.5,
     )
+    current_run = get_current_run_tree()
+
+    if current_run:
+        current_run.metadata["usage_metadata"] = {
+            "input_tokens": raw_response.usage.prompt_tokens,
+            "output_tokens": raw_response.usage.completion_tokens,
+            "total_tokens": raw_response.usage.total_tokens
+        }
 
     ai_message = format_ai_message(response)
+    tool_names = [tc.name for tc in response.tool_calls]
+    logger.info(
+        "agent shopping_cart_agent out iteration=%s final_answer=%s tool_calls=%s tools=%s user_id=%s cart_id=%s",
+        state.shopping_cart_agent.iteration + 1,
+        response.final_answer,
+        len(response.tool_calls),
+        tool_names,
+        state.user_id,
+        state.cart_id,
+    )
 
     return {
         "messages": [ai_message],
@@ -186,32 +260,131 @@ def shopping_cart_agent(state) -> dict:
 
 
 
+
+@traceable(
+    name="warehouse_manager_agent",
+    run_type="llm",
+    metadata={"ls_provider": "openai", "ls_model_name": "gpt-4.1"}
+)
+def warehouse_manager_agent(state) -> dict:
+    """Warehouse ReAct node: check availability, then reserve, then natural-language summary.
+
+    State includes ``warehouse_manager_agent.available_tools`` (JSON tool specs for the prompt).
+    The graph routes to ``warehouse_manager_agent_tool_node`` when ``tool_calls`` is non-empty;
+    see ``warehouse_manager_agent_tool_edge`` in ``graph.py`` (order of checks matters).
+    """
+    template = prompt_template_config(str(_PROMPTS_DIR / "warehouse_manager_agent.yaml"), "warehouse_manager_agent")
+
+    prompt = template.render(
+        available_tools=state.warehouse_manager_agent.available_tools,
+    )
+
+    messages = state.messages
+    conversation = [convert_to_openai_messages(m) for m in messages]
+
+    client = instructor.from_openai(OpenAI())
+
+    response, raw_response = client.chat.completions.create_with_completion(
+        model="gpt-4.1",
+        response_model=WarehouseManagerAgentResponse,
+        messages=[{"role": "system", "content": prompt}, *conversation],
+        temperature=0.5,
+    )
+
+    current_run = get_current_run_tree()
+
+    if current_run:
+        current_run.metadata["usage_metadata"] = {
+            "input_tokens": raw_response.usage.prompt_tokens,
+            "output_tokens": raw_response.usage.completion_tokens,
+            "total_tokens": raw_response.usage.total_tokens
+        }
+
+    ai_message = format_ai_message(response)
+    tool_names = [tc.name for tc in response.tool_calls]
+    logger.info(
+        "agent warehouse_manager_agent out iteration=%s final_answer=%s tool_calls=%s tools=%s",
+        state.warehouse_manager_agent.iteration + 1,
+        response.final_answer,
+        len(response.tool_calls),
+        tool_names,
+    )
+
+    return {
+        "messages": [ai_message],
+        "warehouse_manager_agent": {
+            "tool_calls": [tool_call.model_dump() for tool_call in response.tool_calls],
+            "iteration": state.warehouse_manager_agent.iteration + 1,
+            "final_answer": response.final_answer,
+            "available_tools": state.warehouse_manager_agent.available_tools
+        },
+        "answer": response.answer,
+    }
+
+
+
+
+
 @traceable(
     name="coordinator_agent",
     run_type="llm",
-    metadata={"ls_provider": "openai", "ls_model_name": "gpt-4.1-mini"}
+    metadata={"ls_provider": "openai", "ls_model_name": "gpt-4.1"}
 )
 def coordinator_agent(state):
     """
     Coordinator agent node: entry point that plans and delegates to specialist agents.
 
-    Analyzes conversation to decide: product_qa_agent (product questions) or
-    shopping_cart_agent (cart add/remove/get). Returns next_agent and plan.
-    When final_answer is True with empty plan, the graph ends.
+    Chooses among **product_qa_agent**, **shopping_cart_agent**, and **warehouse_manager_agent**
+    based on the latest user intent. Returns ``next_agent`` and ``plan``; when it responds
+    directly (``final_answer``), it may emit a short ``AIMessage``—otherwise specialists
+    append the user-visible text.
+
+    ``trace_id`` is copied from the active LangSmith run when present; else ``""`` so the
+    API always returns a string (Streamlit feedback endpoint).
     """
     prompt_template = prompt_template_config(str(_PROMPTS_DIR / "coordinator_agent.yaml"), "coordinator_agent")
     prompt = prompt_template.render()
 
-    conversation = messages_to_openai(state.messages)
+    messages = state.messages
+    conversation = [convert_to_openai_messages(m) for m in messages]
+
+    logger.info(
+        "agent coordinator_agent in messages=%s openai_messages=%s",
+        _summarize_messages_for_log(messages),
+        len(conversation),
+    )
 
     client = instructor.from_openai(OpenAI())
 
     response, raw_response = client.chat.completions.create_with_completion(
-        model="gpt-4.1-mini",
+        model="gpt-4.1",
         response_model=CoordinatorAgentResponse,
         messages=[{"role": "system", "content": prompt}, *conversation],
         temperature=0.5,
     )
+
+    # Root trace id for human feedback (submit_feedback); missing when tracing is off.
+    trace_id = ""
+    current_run = get_current_run_tree()
+
+    if current_run:
+        current_run.metadata["usage_metadata"] = {
+            "input_tokens": raw_response.usage.prompt_tokens,
+            "output_tokens": raw_response.usage.completion_tokens,
+            "total_tokens": raw_response.usage.total_tokens
+        }
+        trace_id = str(getattr(current_run, "trace_id", current_run.id))
+
+    plan_agents = [d.agent for d in response.plan]
+    logger.info(
+        "agent coordinator_agent out iteration=%s final_answer=%s next_agent=%r plan_len=%s plan_agents=%s",
+        state.coordinator_agent.iteration + 1,
+        response.final_answer,
+        response.next_agent,
+        len(response.plan),
+        plan_agents,
+    )
+
 
     # Coordinator only adds a message when it has a final answer (e.g. off-topic response).
     # When delegating, the specialist agent will add the substantive message.
@@ -229,5 +402,6 @@ def coordinator_agent(state):
           "next_agent": response.next_agent,
           "plan": [data.model_dump() for data in response.plan]
 
-        }
-}
+        },
+        "trace_id": trace_id
+    }

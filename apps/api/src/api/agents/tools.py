@@ -7,13 +7,25 @@ Product QA agent tools (retrieval):
 - get_formatted_reviews_context: Customer reviews from Amazon-items-collection-01-reviews,
   scoped by item IDs. Two-stage: agent retrieves items first, then reviews for those items.
 
-Shopping cart agent tools (persistence in tools_database):
+Shopping cart agent tools (persistence in ``tools_database`` / schema ``shopping_carts``):
 - add_to_shopping_cart: Upsert items; fetches price/image from Qdrant by parent_asin.
 - get_shopping_cart: Returns cart items with total_price (price × quantity).
 - remove_from_cart: Delete item by product_id.
 
-All tools are @traceable for LangSmith observability. Agent decides when to call each tool.
+Warehouse manager tools (same Postgres **host** as cart—``tools_database``, schema ``warehouses``):
+- check_warehouse_availability: Read ``warehouses.inventory``; classify full vs partial fulfillment.
+- reserve_warehouse_items: Transactionally increment ``reserved_quantity`` (``available_quantity``
+  is generated as ``total_quantity - reserved_quantity``). See ``scripts/sql/warehouse_management.sql``.
+
+**Docker networking:** Connections use ``host="postgres"``, ``port=5432`` (service on the compose
+network). From the **host machine**, ``psql`` often uses ``localhost:5433`` mapped to that port.
+
+**Logging:** INFO lines around tool entry/exit help correlate API logs with LangSmith spans.
+
+All tools are ``@traceable`` for LangSmith. The LLM chooses when to invoke them (ReAct pattern).
 """
+import logging
+
 import openai
 from langsmith import traceable, get_current_run_tree
 from qdrant_client import QdrantClient
@@ -21,6 +33,9 @@ from qdrant_client.models import Prefetch, FusionQuery, Document, Filter, FieldC
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import numpy as np
+
+# Standard library logger name -> appears as ``api.agents.tools`` in uvicorn/docker output.
+logger = logging.getLogger(__name__)
 
 @traceable(
     name="embed_query",
@@ -124,8 +139,18 @@ def get_formatted_items_context(query: str, top_k: int = 5) -> str:
     Returns:
         A string of the top k context chunks with IDs and average ratings prepending each chunk, each representing an inventory item for a given query.
     """
+    logger.info(
+        "tool get_formatted_items_context top_k=%s query_len=%s",
+        top_k,
+        len(query),
+    )
     context = retrieve_items_data(query, top_k)
     formatted_context = process_items_context(context)
+    logger.info(
+        "tool get_formatted_items_context done chunks=%s context_chars=%s",
+        len(context.get("retrieved_context", [])),
+        len(formatted_context),
+    )
     return formatted_context
 
 # Item Reviews Retrieval Tool (Week 4: second collection for review text)
@@ -205,16 +230,23 @@ def get_formatted_reviews_context(query: str, item_list: list, top_k: int = 15) 
     Returns:
         A string of the top k context chunks with IDs prepending each chunk, each representing a review for a given inventory
     """
+    logger.info(
+        "tool get_formatted_reviews_context top_k=%s item_list_len=%s query_len=%s",
+        top_k,
+        len(item_list),
+        len(query),
+    )
     context = retrieve_reviews_data(query, item_list, top_k)
     formatted_context = process_reviews_context(context)
+    logger.info(
+        "tool get_formatted_reviews_context done chunks=%s context_chars=%s",
+        len(context.get("retrieved_context", [])),
+        len(formatted_context),
+    )
     return formatted_context
 
 
 
-@traceable(
-    name="add_to_shopping_cart",
-    run_type="tool"
-)
 def add_to_shopping_cart(items: list[dict], user_id: str, cart_id: str) -> str:
     """Add a list of provided items to the shopping cart.
 
@@ -226,6 +258,12 @@ def add_to_shopping_cart(items: list[dict], user_id: str, cart_id: str) -> str:
     Returns:
         A confirmation message listing the items added to the shopping cart.
     """
+    logger.info(
+        "tool add_to_shopping_cart n_items=%s user_id=%s cart_id=%s",
+        len(items),
+        user_id,
+        cart_id,
+    )
     conn = psycopg2.connect(
         host="postgres",
         port=5432,
@@ -327,13 +365,11 @@ def add_to_shopping_cart(items: list[dict], user_id: str, cart_id: str) -> str:
                 )
 
     conn.close()
-    return f"Added {items} to the shopping cart."
+    msg = f"Added {items} to the shopping cart."
+    logger.info("tool add_to_shopping_cart done msg_chars=%s", len(msg))
+    return msg
 
 
-@traceable(
-    name="get_shopping_cart",
-    run_type="tool"
-)
 def get_shopping_cart(user_id: str, cart_id: str) -> list[dict]:
     """Retrieve all items in a user's shopping cart.
 
@@ -344,6 +380,7 @@ def get_shopping_cart(user_id: str, cart_id: str) -> list[dict]:
     Returns:
         List of dictionaries containing cart items.
     """
+    logger.info("tool get_shopping_cart user_id=%s cart_id=%s", user_id, cart_id)
     conn = psycopg2.connect(
         host="postgres",
         port=5432,
@@ -364,12 +401,12 @@ def get_shopping_cart(user_id: str, cart_id: str) -> list[dict]:
         ORDER BY added_at DESC
         """
         cursor.execute(query, (user_id, cart_id))
-        return [dict(row) for row in cursor.fetchall()]
+        rows = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    logger.info("tool get_shopping_cart done rows=%s", len(rows))
+    return rows
 
-@traceable(
-    name="remove_from_cart",
-    run_type="tool"
-)
+
 def remove_from_cart(product_id: str, user_id: str, cart_id: str) -> bool:
     """Remove an item completely from the shopping cart.
 
@@ -381,6 +418,12 @@ def remove_from_cart(product_id: str, user_id: str, cart_id: str) -> bool:
     Returns:
         True if item was removed, False if item wasn't found.
     """
+    logger.info(
+        "tool remove_from_cart product_id=%s user_id=%s cart_id=%s",
+        product_id,
+        user_id,
+        cart_id,
+    )
     conn = psycopg2.connect(
         host="postgres",
         port=5432,
@@ -396,4 +439,266 @@ def remove_from_cart(product_id: str, user_id: str, cart_id: str) -> bool:
         WHERE user_id = %s AND shopping_cart_id = %s AND product_id = %s
         """
         cursor.execute(query, (user_id, cart_id, product_id))
-        return cursor.rowcount > 0
+        removed = cursor.rowcount > 0
+    conn.close()
+    logger.info("tool remove_from_cart done removed=%s", removed)
+    return removed
+
+
+def check_warehouse_availability(items: list[dict]) -> dict:
+    """Check availability of items across warehouses, including partial fulfillment options.
+
+    Queries warehouses.inventory per warehouse and per item. Categorizes warehouses as
+    full (can fulfill all items) or partial (some stock). Tracks unavailable items by
+    summing available_quantity across all warehouses.
+
+    Args:
+        items: A list of items to check. Each item is a dictionary with keys: product_id, quantity.
+
+    Returns:
+        A dictionary containing:
+        - can_fulfill_completely: bool indicating if all items can be fulfilled from at least one warehouse
+        - warehouses_full_fulfillment: list of warehouses that can fulfill the entire order
+        - warehouses_partial_fulfillment: list of warehouses with partial availability
+        - unavailable_items: list of items that cannot be fulfilled from any warehouse
+        - details: detailed breakdown per warehouse with availability for each item
+    """
+    logger.info("tool check_warehouse_availability n_items=%s", len(items))
+    # Same DB as shopping cart (warehouses schema); from api container use service postgres:5432 (5433 is host-only)
+    conn = psycopg2.connect(
+        host="postgres",
+        port=5432,
+        database="tools_database",
+        user="langgraph_user",
+        password="langgraph_password",
+    )
+
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            result = {
+                "can_fulfill_completely": False,
+                "warehouses_full_fulfillment": [],
+                "warehouses_partial_fulfillment": [],
+                "unavailable_items": [],
+                "details": []
+            }
+
+            # Check each warehouse for availability
+            warehouse_query = """
+                SELECT DISTINCT warehouse_id, warehouse_name, warehouse_location
+                FROM warehouses.inventory
+            """
+            cursor.execute(warehouse_query)
+            warehouses = cursor.fetchall()
+
+            for warehouse in warehouses:
+                warehouse_can_fulfill_all = True
+                has_any_availability = False
+                warehouse_details = {
+                    "warehouse_id": warehouse['warehouse_id'],
+                    "warehouse_name": warehouse['warehouse_name'],
+                    "warehouse_location": warehouse['warehouse_location'],
+                    "items": [],
+                    "can_fulfill_all": False,
+                    "has_partial": False
+                }
+
+                for item in items:
+                    product_id = item['product_id']
+                    requested_quantity = item['quantity']
+
+                    # Check availability in this warehouse
+                    availability_query = """
+                        SELECT product_id, total_quantity, reserved_quantity, available_quantity
+                        FROM warehouses.inventory
+                        WHERE warehouse_id = %s AND product_id = %s
+                    """
+                    cursor.execute(availability_query, (warehouse['warehouse_id'], product_id))
+                    inventory = cursor.fetchone()
+
+                    available_qty = inventory['available_quantity'] if inventory else 0
+
+                    item_detail = {
+                        "product_id": product_id,
+                        "requested": requested_quantity,
+                        "available": available_qty,
+                        "can_fulfill_completely": available_qty >= requested_quantity,
+                        "can_fulfill_partially": available_qty > 0 and available_qty < requested_quantity
+                    }
+                    warehouse_details["items"].append(item_detail)
+
+                    # Track if warehouse can fulfill this item completely
+                    if available_qty < requested_quantity:
+                        warehouse_can_fulfill_all = False
+
+                    # Track if warehouse has any availability for any item
+                    if available_qty > 0:
+                        has_any_availability = True
+
+                # Categorize warehouse
+                if warehouse_can_fulfill_all:
+                    warehouse_details["can_fulfill_all"] = True
+                    result["warehouses_full_fulfillment"].append({
+                        "warehouse_id": warehouse['warehouse_id'],
+                        "warehouse_name": warehouse['warehouse_name'],
+                        "warehouse_location": warehouse['warehouse_location']
+                    })
+                elif has_any_availability:
+                    warehouse_details["has_partial"] = True
+                    result["warehouses_partial_fulfillment"].append({
+                        "warehouse_id": warehouse['warehouse_id'],
+                        "warehouse_name": warehouse['warehouse_name'],
+                        "warehouse_location": warehouse['warehouse_location']
+                    })
+
+                result["details"].append(warehouse_details)
+
+            # Check if any items cannot be fulfilled from any warehouse
+            for item in items:
+                product_id = item['product_id']
+                requested_quantity = item['quantity']
+
+                # Get total available quantity across all warehouses
+                total_available_query = """
+                    SELECT product_id, SUM(available_quantity) as total_available
+                    FROM warehouses.inventory
+                    WHERE product_id = %s
+                    GROUP BY product_id
+                """
+                cursor.execute(total_available_query, (product_id,))
+                total_available = cursor.fetchone()
+
+                total_available_qty = total_available['total_available'] if total_available else 0
+
+                if total_available_qty < requested_quantity:
+                    result["unavailable_items"].append({
+                        "product_id": product_id,
+                        "requested": requested_quantity,
+                        "total_available_across_warehouses": total_available_qty,
+                        "shortage": requested_quantity - total_available_qty
+                    })
+
+            result["can_fulfill_completely"] = (
+                len(result["warehouses_full_fulfillment"]) > 0
+                and len(result["unavailable_items"]) == 0
+            )
+
+            logger.info(
+                "tool check_warehouse_availability done can_fulfill_completely=%s "
+                "full_warehouses=%s partial_warehouses=%s unavailable_items=%s",
+                result["can_fulfill_completely"],
+                len(result["warehouses_full_fulfillment"]),
+                len(result["warehouses_partial_fulfillment"]),
+                len(result["unavailable_items"]),
+            )
+            return result
+
+    finally:
+        conn.close()
+
+
+def reserve_warehouse_items(reservations: list[dict]) -> dict:
+    """Reserve items from multiple warehouses in a single transaction.
+
+    Uses SELECT ... FOR UPDATE to lock inventory rows, then increments reserved_quantity.
+    available_quantity is a GENERATED column (total - reserved), so we only update reserved.
+    Commits only if all reservations succeed; otherwise rolls back.
+
+    Args:
+        reservations: A list of reservations. Each reservation is a dictionary with keys:
+            - warehouse_id: The warehouse to reserve from
+            - product_id: The product to reserve
+            - quantity: The quantity to reserve
+
+    Returns:
+        A dictionary containing:
+        - success: bool indicating if all reservations were successful
+        - reserved_items: list of successfully reserved items
+        - failed_items: list of items that could not be reserved
+    """
+    logger.info("tool reserve_warehouse_items n_reservations=%s", len(reservations))
+    conn = psycopg2.connect(
+        host="postgres",
+        port=5432,
+        database="tools_database",
+        user="langgraph_user",
+        password="langgraph_password",
+    )
+    conn.autocommit = False  # Manual commit/rollback for atomic all-or-nothing behavior
+
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            result = {
+                "success": False,
+                "reserved_items": [],
+                "failed_items": []
+            }
+
+            for reservation in reservations:
+                warehouse_id = reservation['warehouse_id']
+                product_id = reservation['product_id']
+                quantity = reservation['quantity']
+
+                # FOR UPDATE locks the row until commit/rollback; prevents concurrent over-reservation
+                check_query = """
+                    SELECT warehouse_id, product_id, warehouse_name, warehouse_location,
+                           total_quantity, reserved_quantity, available_quantity
+                    FROM warehouses.inventory
+                    WHERE warehouse_id = %s AND product_id = %s
+                    FOR UPDATE
+                """
+                cursor.execute(check_query, (warehouse_id, product_id))
+                inventory = cursor.fetchone()
+
+                if inventory and inventory['available_quantity'] >= quantity:
+                    # Update inventory to reserve the items
+                    update_query = """
+                        UPDATE warehouses.inventory
+                        SET reserved_quantity = reserved_quantity + %s
+                        WHERE warehouse_id = %s AND product_id = %s
+                    """
+                    cursor.execute(update_query, (quantity, warehouse_id, product_id))
+                    result["reserved_items"].append({
+                        "product_id": product_id,
+                        "quantity": quantity,
+                        "warehouse_id": warehouse_id,
+                        "warehouse_name": inventory['warehouse_name'],
+                        "warehouse_location": inventory['warehouse_location']
+                    })
+                else:
+                    result["failed_items"].append({
+                        "product_id": product_id,
+                        "warehouse_id": warehouse_id,
+                        "requested": quantity,
+                        "available": inventory['available_quantity'] if inventory else 0,
+                        "reason": "insufficient_stock" if inventory else "not_in_warehouse"
+                    })
+
+            # Only commit if all items were successfully reserved
+            if len(result["failed_items"]) == 0:
+                conn.commit()
+                result["success"] = True
+            else:
+                conn.rollback()
+
+        logger.info(
+            "tool reserve_warehouse_items done success=%s n_reserved=%s n_failed=%s",
+            result["success"],
+            len(result["reserved_items"]),
+            len(result["failed_items"]),
+        )
+        return result
+
+    except Exception as e:
+        logger.warning(
+            "tool reserve_warehouse_items failed host=%s port=%s db=%s err=%s",
+            "postgres",
+            5432,
+            "tools_database",
+            e,
+            exc_info=True,
+        )
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()

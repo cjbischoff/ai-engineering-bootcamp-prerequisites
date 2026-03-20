@@ -10,17 +10,18 @@ This directory contains the production implementation of the RAG pipeline - a 5-
 
 ```
 apps/api/src/api/agents/
-├── agents.py                    # product_qa_agent, shopping_cart_agent, coordinator_agent (Week 5)
+├── agents.py                    # product_qa, shopping_cart, warehouse_manager, coordinator (Week 5)
 ├── graph.py                     # StateGraph, rag_agent_stream_wrapper (SSE streaming)
-├── tools.py                     # Retrieval + shopping cart tools (Week 4-5)
+├── tools.py                     # Retrieval + cart + warehouse inventory tools (Week 4-5)
 ├── retrieval_generation.py      # Original linear RAG pipeline (still used by evals)
 ├── utils/
-│   ├── prompt_management.py    # YAML prompt loading (product_qa, shopping_cart, coordinator)
+│   ├── prompt_management.py    # YAML prompt loading (all agent prompts)
 │   └── utils.py                 # format_ai_message, get_tool_descriptions, messages_to_openai
 └── prompts/
     ├── product_qa_agent.yaml    # Product Q&A agent prompt
     ├── shopping_cart_agent.yaml # Shopping cart agent prompt
     ├── coordinator_agent.yaml   # Coordinator routing prompt
+    ├── warehouse_manager_agent.yaml # Warehouse check + reserve (Week 5)
     └── retrieval_generation.yaml # Original RAG prompt
 ```
 
@@ -29,17 +30,27 @@ apps/api/src/api/agents/
 The `/agent/` endpoint uses a **LangGraph coordinator** that delegates to specialist agents:
 
 ```
-START → coordinator_agent → product_qa_agent | shopping_cart_agent ⇄ tool_node → back to coordinator → END
+START → coordinator_agent → product_qa_agent | shopping_cart_agent | warehouse_manager_agent
+       ⇄ specialist_tool_node → same specialist → … → coordinator → END
 ```
 
-- **coordinator_agent**: Entry point. Plans tasks, routes to product_qa_agent (product questions) or shopping_cart_agent (cart add/remove/get). Returns to coordinator when done; coordinator may delegate again or end.
-- **product_qa_agent**: Answers product questions. Uses `get_formatted_items_context`, `get_formatted_reviews_context`. Loops with tool_node until final_answer.
-- **shopping_cart_agent**: Manages cart. Uses `add_to_shopping_cart`, `remove_from_cart`, `get_shopping_cart`. Loops with tool_node until final_answer.
-- **tools**: Product QA has retrieval tools; shopping cart has persistence tools (Postgres). Each agent has its own ToolNode.
+- **coordinator_agent**: Entry point. Plans tasks, routes to **product_qa_agent** (product questions), **shopping_cart_agent** (cart add/remove/get), or **warehouse_manager_agent** (availability / reserve). Returns to coordinator when a specialist finishes; coordinator may delegate again or end.
+- **product_qa_agent**: Answers product questions. Uses `get_formatted_items_context`, `get_formatted_reviews_context`. Loops with its ToolNode until `final_answer`.
+- **shopping_cart_agent**: Manages cart. Uses `add_to_shopping_cart`, `remove_from_cart`, `get_shopping_cart`. Loops with its ToolNode until `final_answer`.
+- **warehouse_manager_agent**: Inventory workflow. Uses `check_warehouse_availability`, then `reserve_warehouse_items` (Postgres `warehouses.inventory`; see `scripts/sql/warehouse_management.sql`). Same ReAct pattern: tool node loops back to the agent until `final_answer`.
+- **tools**: Each specialist has a **dedicated** `ToolNode` in `graph.py` so tool results are wired to the correct agent (avoids OpenAI “orphan tool_calls” errors).
 
-**How they work together:** Coordinator analyzes conversation, delegates to the right agent. Specialist runs until done, returns to coordinator. Coordinator decides next step (delegate again or end). State (messages, references, cart_id) flows through the graph.
+**How they work together:** Coordinator reads full message history, picks `next_agent`, and the graph routes. Specialists append `AIMessage` / tool messages to state. `user_id` / `cart_id` default to `thread_id` for session-scoped cart and tracing.
 
-**Streaming:** `rag_agent_stream_wrapper` yields SSE: status updates ("Planning...", "Looking for items...") and `final_answer` JSON (answer, used_context, trace_id, shopping_cart).
+**Streaming:** `rag_agent_stream_wrapper` yields SSE: status text (“Planning…”, “Managing warehouse…”) from graph debug events, then `final_answer` JSON (`answer`, `used_context`, `trace_id`, `shopping_cart`). After the graph stops, references are **enriched** from Qdrant (image/price), which explains extra Qdrant queries in logs after `END`.
+
+### Observability (logging)
+
+- **`api.agents.graph`**: INFO on conditional edges (`*_tool_edge`, `coordinator_agent_edge`), stream start/done, warehouse tool-node tool names.
+- **`api.agents.agents`**: INFO after each LLM node with iteration, `final_answer`, tool names, and (coordinator) a **type-only** tail of messages via `_summarize_messages_for_log`—useful to spot bad message order (e.g. assistant `tool_calls` without following `tool` messages).
+- **`api.agents.tools`**: INFO around cart and warehouse DB tools (counts, success flags). Warehouse tools use **`host=postgres`, `port=5432`** inside Docker (not `localhost`; the host maps `5433→5432` for ad-hoc `psql` from your laptop).
+
+LangSmith `@traceable` on nodes and tools remains the source of truth for traces; logs complement Docker/`uvicorn` output during local debugging.
 
 ## RAG Pipeline Workflow
 
