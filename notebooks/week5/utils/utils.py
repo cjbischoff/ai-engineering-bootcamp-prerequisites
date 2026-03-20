@@ -1,52 +1,29 @@
-"""Agent utils: format_ai_message, get_tool_descriptions. Sprint 2 / Video 5; Week 4 multi-turn."""
+"""
+Utilities for LangGraph multi-turn agents (Week 4, Week 5 / Sprint 3-4).
+
+Same as week3/utils but used by Week 4 notebooks (multi-turn, multiple tools).
+format_ai_message with tool_call_id_prefix is critical for multi-turn: each
+conversation turn must use unique tool_call IDs to satisfy OpenAI API.
+"""
+
 import ast
 import inspect
-import re
-from typing import Any
+from typing import Any, Dict
 
-from langchain_core.messages import AIMessage, convert_to_openai_messages
-
-# OpenAI tool names must match ^[a-zA-Z0-9_-]+$ (no dots). LLM may return "functions.tool_name".
-_TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
-
-
-def _sanitize_tool_name(name: str) -> str:
-    """Strip invalid prefixes (e.g. functions.) so OpenAI accepts the name."""
-    if not name or _TOOL_NAME_PATTERN.match(name):
-        return name
-    if name.startswith("functions."):
-        return name[len("functions.") :]
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:64]
-
-
-def messages_to_openai(messages) -> list:
-    """Convert LangGraph messages to OpenAI format and sanitize tool names (checkpoint may have invalid names)."""
-    out = []
-    for message in messages:
-        converted = convert_to_openai_messages(message)
-        msgs = converted if isinstance(converted, list) else [converted]
-        for m in msgs:
-            if isinstance(m, dict) and "tool_calls" in m:
-                for tc in m["tool_calls"]:
-                    if isinstance(tc.get("function"), dict) and "name" in tc["function"]:
-                        tc["function"]["name"] = _sanitize_tool_name(tc["function"]["name"])
-            out.append(m)
-    return out
+from langchain_core.messages import AIMessage
 
 
 def format_ai_message(response, tool_call_id_prefix: str = "call"):
     """
-    Convert AgentResponse to AIMessage. Includes tool_calls when agent wants to invoke tools.
-
-    tool_call_id_prefix: Unique prefix per turn (e.g. call_0, call_1) to avoid OpenAI
-    BadRequestError when same IDs reused across multi-turn conversation.
+    Format AgentResponse to AIMessage. Use unique prefix per turn for multi-turn.
+    Prevents OpenAI BadRequestError when tool_call IDs are reused across turns.
     """
     if response.tool_calls:
         tool_calls = []
         for i, tc in enumerate(response.tool_calls):
             tool_calls.append({
                 "id": f"{tool_call_id_prefix}_{i}",
-                "name": _sanitize_tool_name(tc.name),
+                "name": tc.name,
                 "args": tc.arguments
             })
 
@@ -62,9 +39,9 @@ def format_ai_message(response, tool_call_id_prefix: str = "call"):
     return ai_message
 
 
-# --- Tool schema extraction: parse docstrings for agent's available_tools ---
+# #### TOOL DESCRIPTION PARSING ####
 
-def parse_function_definition(function_def: str) -> dict[str, Any]:
+def parse_function_definition(function_def: str) -> Dict[str, Any]:
     """Parse a function definition string to extract metadata including type hints."""
     result = {
         "name": "",
@@ -75,10 +52,7 @@ def parse_function_definition(function_def: str) -> dict[str, Any]:
     }
 
     # Parse the function using AST
-    try:
-        tree = ast.parse(function_def.strip())
-    except SyntaxError:
-        return result
+    tree = ast.parse(function_def.strip())
     if not tree.body or not isinstance(tree.body[0], ast.FunctionDef):
         return result
 
@@ -119,10 +93,7 @@ def parse_function_definition(function_def: str) -> dict[str, Any]:
         # Check for default value
         default_idx = i - (num_args - num_defaults)
         if default_idx >= 0:
-            try:
-                param_info["default"] = ast.literal_eval(ast.unparse(defaults[default_idx]))
-            except (ValueError, TypeError):
-                pass
+            param_info["default"] = ast.literal_eval(ast.unparse(defaults[default_idx]))
         else:
             result["required"].append(arg.arg)
 
@@ -158,7 +129,7 @@ def get_type_from_annotation(annotation) -> str:
     return "string"
 
 
-def parse_docstring_params(docstring: str) -> dict[str, str]:
+def parse_docstring_params(docstring: str) -> Dict[str, str]:
     """Extract parameter descriptions from docstring (handles both Args: and Parameters: formats)."""
     params = {}
     lines = docstring.split('\n')
@@ -189,7 +160,7 @@ def parse_docstring_params(docstring: str) -> dict[str, str]:
 
 
 def get_tool_descriptions(function_list):
-    """Extract tool schemas (name, description, parameters) from functions. Used as available_tools for agent."""
+    """Extract tool descriptions from the function list"""
     descriptions = []
 
     for function in function_list:
@@ -199,4 +170,4 @@ def get_tool_descriptions(function_list):
         if result:
             descriptions.append(result)
 
-    return descriptions if descriptions else []
+    return descriptions if descriptions else "Could not extract tool descriptions"

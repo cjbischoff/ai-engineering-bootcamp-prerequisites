@@ -1,17 +1,20 @@
 """
-FastAPI Endpoints for RAG-based Product Q&A API
+FastAPI Endpoints for the LangGraph multi-agent RAG API (Sprint 2–4; Week 4–5).
 
-This module defines the REST API endpoints for the RAG system.
-Currently implements a single POST endpoint for answering product questions.
+Defines two routers:
 
-API Structure:
-- Base path: /rag
-- Endpoint: POST /rag/ (note the trailing slash)
-- Request: JSON with query field
-- Response: JSON with request_id and answer fields
+- **Agent router** (``prefix=/agent``): ``POST /agent/`` streams SSE from
+  ``rag_agent_stream_wrapper`` in ``graph.py``. Payload: ``query``, ``thread_id``.
+  The compiled graph is **coordinator-first** (Sprint 4): delegates to product QA,
+  shopping cart, or **warehouse manager** agents—each with its own ``ToolNode``.
+  Yields status lines then ``final_answer`` JSON: ``answer``, ``used_context``,
+  ``trace_id``, ``shopping_cart``. ``thread_id`` scopes ``PostgresSaver`` checkpoints
+  and doubles as default ``user_id`` / ``cart_id`` in agent state.
 
-The endpoint is organized using FastAPI's APIRouter pattern for modularity
-and future extensibility (e.g., adding /rag/health, /rag/feedback endpoints).
+- **Feedback router** (``prefix=/submit_feedback``): POST for LangSmith human feedback
+  (thumbs score + optional comment). Frontend sends ``trace_id`` from the last run.
+
+Uses ``APIRouter`` for modularity. ``RequestIDMiddleware`` sets ``request_id`` for logs.
 """
 
 import logging
@@ -96,10 +99,9 @@ def rag(request: Request, payload: RAGRequest) -> StreamingResponse:
         - Add timeout to prevent long-running queries
         - Validate query length and content (prevent injection)
     """
-    # Sprint 2 / Video 6: ReAct agent replaces rag_pipeline_wrapper. Agent uses tools
-    # (get_formatted_context) to retrieve; rag_agent_wrapper enriches references with
-    # image_url and price from Qdrant (same response shape for frontend compatibility).
-    # thread_id: Required for LangGraph checkpointing (Week 4); same ID = same conversation.
+    # Week 5 + Sprint 4: coordinator -> product_qa_agent | shopping_cart_agent
+    # | warehouse_manager_agent; each specialist has its own ToolNode. SSE stream;
+    # thread_id = PostgresSaver scope + default cart/session keys.
 
 
     # Return structured response with request ID for tracing and enriched product context
@@ -177,5 +179,5 @@ api_router = APIRouter()
 #   - Scalability: Easy to add more routers (/admin, /analytics, etc.)
 #   - Documentation: Auto-generated OpenAPI docs group by tags
 #   - Versioning: Could create /v1/rag, /v2/rag routers separately
-api_router.include_router(rag_router, prefix="/rag", tags=["rag"])
+api_router.include_router(rag_router, prefix="/agent", tags=["agent"])
 api_router.include_router(feedback_router, prefix="/submit_feedback", tags=["feedback"])

@@ -15,10 +15,14 @@ apps/api/src/api/agents/utils/
 └── utils.py                       # Agent utilities (Sprint 2)
 ```
 
-### utils.py (Sprint 2 / Video 5)
+### utils.py (Sprint 2 / Video 5; Sprint 4 / Week 5)
 
-- **format_ai_message(response, tool_call_id_prefix="call")**: Converts AgentResponse to AIMessage. tool_call_id_prefix ensures unique IDs per turn (call_0, call_1) for multi-turn; avoids OpenAI BadRequestError. Required by LangGraph.
-- **get_tool_descriptions(function_list)**: Parses function docstrings into tool schemas (name, description, parameters). Used as `available_tools` for the agent.
+- **format_ai_message(response, tool_call_id_prefix="call")**: Converts Instructor/Pydantic agent responses to `AIMessage`. The `tool_call_id_prefix` yields stable IDs (`call_0`, `call_1`, …) per turn so OpenAI sees a valid alternating pattern of assistant `tool_calls` and tool results. Used by **product_qa_agent**, **shopping_cart_agent**, and **warehouse_manager_agent** in `agents.py`.
+- **get_tool_descriptions(function_list)**: Introspects Python tool callables and builds JSON-schema-style descriptions for the system prompt. `graph.py` calls this for **product QA**, **cart**, and **warehouse** tool lists.
+- **messages_to_openai(messages)**: Legacy helper that batch-converts LangChain message lists. **Current production agents** prefer **`langchain_core.messages.convert_to_openai_messages`** per message in a list comprehension (clearer tool/tool-result pairing for the chat API). `messages_to_openai` may still appear in notebooks or older paths.
+- **_sanitize_tool_name(name)**: Normalizes tool names for SSE status strings and provider compatibility. Used by `graph.py` when mapping tool invocations to user-facing status text.
+
+**How they fit:** `agents.py` imports `format_ai_message` from here and uses `convert_to_openai_messages` from LangChain for history shaping. `graph.py` imports `_sanitize_tool_name` and `get_tool_descriptions`. Executable tools live in `tools.py`.
 
 ## Functions
 

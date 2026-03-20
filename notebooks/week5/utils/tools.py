@@ -1,41 +1,23 @@
 """
-Agent tools for the LangGraph multi-agent workflow (Sprint 2 / Video 5-6; Week 4-5).
+Retrieval, cart, and warehouse tools for Week 5 multi-agent shopping assistant (Sprint 4).
 
-Product QA agent tools (retrieval):
-- get_formatted_items_context: Hybrid search on Amazon-items-collection-01-hybrid-search.
-  Returns formatted product descriptions (ID, rating, description) for the agent to answer questions.
-- get_formatted_reviews_context: Customer reviews from Amazon-items-collection-01-reviews,
-  scoped by item IDs. Two-stage: agent retrieves items first, then reviews for those items.
+Product Q&A tools (used by product_qa_agent):
+- get_formatted_items_context: product descriptions (hybrid search on Amazon-items-collection-01-hybrid-search).
+- get_formatted_reviews_context: customer reviews scoped by item IDs (Amazon-items-collection-01-reviews).
 
-Shopping cart agent tools (persistence in ``tools_database`` / schema ``shopping_carts``):
-- add_to_shopping_cart: Upsert items; fetches price/image from Qdrant by parent_asin.
-- get_shopping_cart: Returns cart items with total_price (price × quantity).
-- remove_from_cart: Delete item by product_id.
+Shopping cart tools (used by shopping_cart_agent):
+- add_to_shopping_cart, get_shopping_cart, remove_from_cart: persist to tools_database.
 
-Warehouse manager tools (same Postgres **host** as cart—``tools_database``, schema ``warehouses``):
-- check_warehouse_availability: Read ``warehouses.inventory``; classify full vs partial fulfillment.
-- reserve_warehouse_items: Transactionally increment ``reserved_quantity`` (``available_quantity``
-  is generated as ``total_quantity - reserved_quantity``). See ``scripts/sql/warehouse_management.sql``.
+Warehouse tools (used by warehouse_manager_agent):
+- check_warehouse_availability: query warehouses.inventory for full/partial fulfillment.
+- reserve_warehouse_items: transactional reservation with FOR UPDATE; all-or-nothing.
 
-**Docker networking:** Connections use ``host="postgres"``, ``port=5432`` (service on the compose
-network). From the **host machine**, ``psql`` often uses ``localhost:5433`` mapped to that port.
-
-**Logging:** INFO lines around tool entry/exit help correlate API logs with LangSmith spans.
-
-All tools are ``@traceable`` for LangSmith. The LLM chooses when to invoke them (ReAct pattern).
+Hides vector search behind tool use: agent decides when/what to retrieve.
 """
-import logging
-
 import openai
 from langsmith import traceable, get_current_run_tree
 from qdrant_client import QdrantClient
-from qdrant_client.models import Prefetch, FusionQuery, Document, Filter, FieldCondition, MatchAny, MatchValue
-import psycopg2
-from psycopg2.extras import RealDictCursor
-import numpy as np
-
-# Standard library logger name -> appears as ``api.agents.tools`` in uvicorn/docker output.
-logger = logging.getLogger(__name__)
+from qdrant_client.models import Prefetch, FusionQuery, Document, Filter, FieldCondition, MatchAny
 
 @traceable(
     name="embed_query",
@@ -70,7 +52,7 @@ def get_embedding(text, model="text-embedding-3-small"):
 def retrieve_items_data(query, k=5):
     """Retrieve top-k products via hybrid search. Creates Qdrant client internally."""
     query_embedding = get_embedding(query)
-    qdrant_client = QdrantClient(url="http://qdrant:6333")
+    qdrant_client = QdrantClient(url="http://localhost:6333")
 
     # Qdrant hybrid search (Week 2 Video 5): dense + sparse (BM25) with RRF fusion.
     # Prefetch retrieves from both vectors; FusionQuery merges by rank (scale-independent).
@@ -139,18 +121,8 @@ def get_formatted_items_context(query: str, top_k: int = 5) -> str:
     Returns:
         A string of the top k context chunks with IDs and average ratings prepending each chunk, each representing an inventory item for a given query.
     """
-    logger.info(
-        "tool get_formatted_items_context top_k=%s query_len=%s",
-        top_k,
-        len(query),
-    )
-    context = retrieve_items_data(query, top_k)
+    context = retrieve_items_data(query, k=top_k)
     formatted_context = process_items_context(context)
-    logger.info(
-        "tool get_formatted_items_context done chunks=%s context_chars=%s",
-        len(context.get("retrieved_context", [])),
-        len(formatted_context),
-    )
     return formatted_context
 
 # Item Reviews Retrieval Tool (Week 4: second collection for review text)
@@ -162,7 +134,7 @@ def get_formatted_items_context(query: str, top_k: int = 5) -> str:
 def retrieve_reviews_data(query, item_list, k=5):
     """Retrieve top-k reviews for given item IDs. Collection stores payload 'text' (review body), not 'description'."""
     query_embedding = get_embedding(query)
-    qdrant_client = QdrantClient(url="http://qdrant:6333")
+    qdrant_client = QdrantClient(url="http://localhost:6333")
 
     # Prefilter by parent_asin: reviews collection stores (parent_asin, text); we only want
     # reviews for items the agent already retrieved (Week 4 two-stage: items first, then reviews).
@@ -223,50 +195,53 @@ def process_reviews_context(context):
 
 def get_formatted_reviews_context(query: str, item_list: list, top_k: int = 15) -> str:
     """
+    Get the top k reviews matching a query for a list of prefiltered items.
     Args:
         query: The query to get the top k reviews for
         item_list: The list of item IDs to prefilter for before running the query
         top_k: The number of reviews to retrieve, this should be at least 20 if multiple items are prefiltered
     Returns:
-        A string of the top k context chunks with IDs prepending each chunk, each representing a review for a given inventory
+        A string of the top k context chunks with IDs prepending each chunk, each representing a review for a given inventory item for a given query.
     """
-    logger.info(
-        "tool get_formatted_reviews_context top_k=%s item_list_len=%s query_len=%s",
-        top_k,
-        len(item_list),
-        len(query),
-    )
-    context = retrieve_reviews_data(query, item_list, top_k)
+    context = retrieve_reviews_data(query, item_list, k=top_k)
+    # Must use process_reviews_context: retrieve_reviews_data returns no retrieved_context_ratings.
     formatted_context = process_reviews_context(context)
-    logger.info(
-        "tool get_formatted_reviews_context done chunks=%s context_chars=%s",
-        len(context.get("retrieved_context", [])),
-        len(formatted_context),
-    )
     return formatted_context
 
+
+
+"""
+Add to Shopping Cart tool for Week 5 Shopping Cart Agent.
+
+Learning: Agent tools that persist state require a database. This tool:
+- Fetches product metadata (price, image) from Qdrant by parent_asin
+- Uses tools_database (bootcamp spec) separate from langgraph_db (checkpointer)
+- Upsert logic: INSERT new row or UPDATE quantity if (user_id, cart_id, product_id) exists
+- Prefetch + FusionQuery: Qdrant hybrid-search pattern for exact product lookup by filter
+"""
+
+import numpy as np
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from qdrant_client import QdrantClient
+from qdrant_client.models import Filter, FieldCondition, MatchValue, Prefetch, FusionQuery
 
 
 def add_to_shopping_cart(items: list[dict], user_id: str, cart_id: str) -> str:
     """Add a list of provided items to the shopping cart.
 
     Args:
-        items: A list of items to add to the shopping cart. Each item is a dictionary with the following keys: product_id, quantity.
+        items: A list of items to add to the shopping cart. Each item is a dictionary
+            with the following keys: product_id, quantity.
         user_id: The id of the user to add the items to the shopping cart.
         cart_id: The id of the shopping cart to add the items to.
 
     Returns:
-        A confirmation message listing the items added to the shopping cart.
+        A list of the items added to the shopping cart.
     """
-    logger.info(
-        "tool add_to_shopping_cart n_items=%s user_id=%s cart_id=%s",
-        len(items),
-        user_id,
-        cart_id,
-    )
     conn = psycopg2.connect(
-        host="postgres",
-        port=5432,
+        host="localhost",
+        port=5433,
         database="tools_database",
         user="langgraph_user",
         password="langgraph_password",
@@ -278,12 +253,12 @@ def add_to_shopping_cart(items: list[dict], user_id: str, cart_id: str) -> str:
             product_id = item["product_id"]
             quantity = item["quantity"]
 
-            qdrant_client = QdrantClient(url="http://qdrant:6333")
+            qdrant_client = QdrantClient(url="http://localhost:6333")
 
             # Qdrant lookup: Prefetch with filter by parent_asin (dummy_vector unused; filter does the work)
             # Why Prefetch: hybrid-search collection expects prefetch; filter narrows to single product
             dummy_vector = np.zeros(1536).tolist()
-            payload = qdrant_client.query_points(
+            results = qdrant_client.query_points(
                 collection_name="Amazon-items-collection-01-hybrid-search",
                 prefetch=[
                     Prefetch(
@@ -302,7 +277,11 @@ def add_to_shopping_cart(items: list[dict], user_id: str, cart_id: str) -> str:
                 ],
                 query=FusionQuery(fusion="rrf"),
                 limit=1,
-            ).points[0].payload
+            )
+            # Guard: product_id must exist in Qdrant catalog; else IndexError on points[0]
+            if not results.points:
+                raise ValueError(f"Product {product_id} not found in catalog")
+            payload = results.points[0].payload
 
             product_image_url = payload.get("image")
             price = payload.get("price")
@@ -365,25 +344,24 @@ def add_to_shopping_cart(items: list[dict], user_id: str, cart_id: str) -> str:
                 )
 
     conn.close()
-    msg = f"Added {items} to the shopping cart."
-    logger.info("tool add_to_shopping_cart done msg_chars=%s", len(msg))
-    return msg
+    return f"Added {items} to the shopping cart."
 
 
 def get_shopping_cart(user_id: str, cart_id: str) -> list[dict]:
     """Retrieve all items in a user's shopping cart.
 
+    Learning: Read-only tool; returns list of dicts with product_id, price, quantity,
+    total_price (price * quantity). RealDictCursor yields dict-like rows for easy serialization.
     Args:
-        user_id: User ID.
-        cart_id: Cart identifier.
+        user_id: User ID
+        cart_id: Cart identifier
 
     Returns:
-        List of dictionaries containing cart items.
+        List of dictionaries containing cart items
     """
-    logger.info("tool get_shopping_cart user_id=%s cart_id=%s", user_id, cart_id)
     conn = psycopg2.connect(
-        host="postgres",
-        port=5432,
+        host="localhost",
+        port=5433,
         database="tools_database",
         user="langgraph_user",
         password="langgraph_password",
@@ -401,32 +379,28 @@ def get_shopping_cart(user_id: str, cart_id: str) -> list[dict]:
         ORDER BY added_at DESC
         """
         cursor.execute(query, (user_id, cart_id))
-        rows = [dict(row) for row in cursor.fetchall()]
+        # Convert RealDictRow to plain dict for JSON-serializable return (agent tool output)
+        return [dict(row) for row in cursor.fetchall()]
+
     conn.close()
-    logger.info("tool get_shopping_cart done rows=%s", len(rows))
-    return rows
 
 
 def remove_from_cart(product_id: str, user_id: str, cart_id: str) -> bool:
     """Remove an item completely from the shopping cart.
 
+    Learning: DELETE by (user_id, cart_id, product_id). rowcount > 0 indicates success;
+    returns False if item wasn't in cart (idempotent for "remove" semantics).
     Args:
-        product_id: Product ID to remove.
-        user_id: User ID.
-        cart_id: Cart identifier.
+        user_id: User ID
+        product_id: Product ID to remove
+        cart_id: Cart identifier
 
     Returns:
-        True if item was removed, False if item wasn't found.
+        True if item was removed, False if item wasn't found
     """
-    logger.info(
-        "tool remove_from_cart product_id=%s user_id=%s cart_id=%s",
-        product_id,
-        user_id,
-        cart_id,
-    )
     conn = psycopg2.connect(
-        host="postgres",
-        port=5432,
+        host="localhost",
+        port=5433,
         database="tools_database",
         user="langgraph_user",
         password="langgraph_password",
@@ -439,10 +413,9 @@ def remove_from_cart(product_id: str, user_id: str, cart_id: str) -> bool:
         WHERE user_id = %s AND shopping_cart_id = %s AND product_id = %s
         """
         cursor.execute(query, (user_id, cart_id, product_id))
-        removed = cursor.rowcount > 0
+        return cursor.rowcount > 0
+
     conn.close()
-    logger.info("tool remove_from_cart done removed=%s", removed)
-    return removed
 
 
 def check_warehouse_availability(items: list[dict]) -> dict:
@@ -463,14 +436,13 @@ def check_warehouse_availability(items: list[dict]) -> dict:
         - unavailable_items: list of items that cannot be fulfilled from any warehouse
         - details: detailed breakdown per warehouse with availability for each item
     """
-    logger.info("tool check_warehouse_availability n_items=%s", len(items))
-    # Same DB as shopping cart (warehouses schema); from api container use service postgres:5432 (5433 is host-only)
+    # tools_database, port 5433: same DB as shopping cart; warehouses schema is separate
     conn = psycopg2.connect(
-        host="postgres",
-        port=5432,
+        host="localhost",
+        port=5433,
         database="tools_database",
         user="langgraph_user",
-        password="langgraph_password",
+        password="langgraph_password"
     )
 
     try:
@@ -583,14 +555,6 @@ def check_warehouse_availability(items: list[dict]) -> dict:
                 and len(result["unavailable_items"]) == 0
             )
 
-            logger.info(
-                "tool check_warehouse_availability done can_fulfill_completely=%s "
-                "full_warehouses=%s partial_warehouses=%s unavailable_items=%s",
-                result["can_fulfill_completely"],
-                len(result["warehouses_full_fulfillment"]),
-                len(result["warehouses_partial_fulfillment"]),
-                len(result["unavailable_items"]),
-            )
             return result
 
     finally:
@@ -616,13 +580,12 @@ def reserve_warehouse_items(reservations: list[dict]) -> dict:
         - reserved_items: list of successfully reserved items
         - failed_items: list of items that could not be reserved
     """
-    logger.info("tool reserve_warehouse_items n_reservations=%s", len(reservations))
     conn = psycopg2.connect(
-        host="postgres",
-        port=5432,
+        host="localhost",
+        port=5433,
         database="tools_database",
         user="langgraph_user",
-        password="langgraph_password",
+        password="langgraph_password"
     )
     conn.autocommit = False  # Manual commit/rollback for atomic all-or-nothing behavior
 
@@ -681,23 +644,9 @@ def reserve_warehouse_items(reservations: list[dict]) -> dict:
             else:
                 conn.rollback()
 
-        logger.info(
-            "tool reserve_warehouse_items done success=%s n_reserved=%s n_failed=%s",
-            result["success"],
-            len(result["reserved_items"]),
-            len(result["failed_items"]),
-        )
         return result
 
     except Exception as e:
-        logger.warning(
-            "tool reserve_warehouse_items failed host=%s port=%s db=%s err=%s",
-            "postgres",
-            5432,
-            "tools_database",
-            e,
-            exc_info=True,
-        )
         conn.rollback()
         raise e
     finally:

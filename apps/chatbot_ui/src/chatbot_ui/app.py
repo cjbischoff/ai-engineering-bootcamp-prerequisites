@@ -10,11 +10,12 @@ Generation) pipeline and displays product recommendations with enriched metadata
 ARCHITECTURE:
 =============
 - User types a question in the chat input
-- Frontend sends POST request to FastAPI backend (/rag endpoint)
-- Backend runs RAG pipeline (retrieve products, generate answer, enrich with metadata)
+- Frontend sends POST to FastAPI /agent/ with query and thread_id (session_id)
+- Backend runs LangGraph coordinator -> product_qa_agent | shopping_cart_agent (Week 5)
+- Backend streams SSE: status updates ("Planning...", "Looking for items...") and final_answer JSON
 - Frontend displays:
   1. LLM's answer in the chat
-  2. Product cards in the sidebar (Video 4 enhancement)
+  2. Product cards in Suggestions tab; Shopping Cart tab shows cart items (Week 5)
 
 VIDEO PROGRESSION:
 ==================
@@ -123,7 +124,7 @@ def api_call(method, url, **kwargs):
 
     Args:
         method (str): HTTP method ('get', 'post', 'put', 'delete')
-        url (str): Full URL to call (e.g., "http://api:8000/rag")
+        url (str): Full URL to call (e.g., "http://api:8000/agent")
         **kwargs: Additional arguments passed to requests (json, headers, timeout, etc.)
 
     Returns:
@@ -132,7 +133,7 @@ def api_call(method, url, **kwargs):
         - response_data: Parsed JSON from response or error dict
 
     Example:
-        success, data = api_call("post", f"{config.API_URL}/rag", json={"query": "..."})
+        success, data = api_call("post", f"{config.API_URL}/agent", json={"query": "..."})
         if success:
             answer = data["answer"]
             products = data["used_context"]
@@ -205,7 +206,7 @@ def api_call(method, url, **kwargs):
 
 def api_call_stream(method, url, **kwargs):
     """
-    Make streaming HTTP request to /rag/ endpoint (SSE).
+    Make streaming HTTP request to /agent/ endpoint (SSE).
 
     Returns either:
     - Iterator of bytes/str (response.iter_lines()) on success
@@ -276,6 +277,8 @@ if "used_context" not in st.session_state:
 # - No conversation yet means no products to show
 # - Gets populated after first API call (see line 90 below)
 
+if "shopping_cart" not in st.session_state:
+    st.session_state.shopping_cart = []
 
 # Initialize feedback states (simplified)
 if "latest_feedback" not in st.session_state:
@@ -306,17 +309,16 @@ with st.sidebar:
     # =============================================================================
     # Educational: st.tabs() creates clickable tabs (like browser tabs)
     # Returns a tuple of tab objects, one per tab label
-    # The comma after suggestions_tab unpacks the single-item tuple: (tab,) -> tab
+    # Unpacks the tuple: (tab1, tab2) -> suggestions_tab, shopping_cart_tab
 
     # Create tabs in the sidebar
     # Why tabs? Future enhancement could add more tabs:
     # - "🔍 Suggestions" (current products)
     # - "📊 History" (past conversations)
     # - "⚙️ Settings" (model selection, temperature, etc.)
-    suggestions_tab, = st.tabs(["🔍 Suggestions"])
-    # Educational: The trailing comma is REQUIRED for single-item tuple unpacking
-    # Without it: suggestions_tab = st.tabs([...]) would be a tuple, not a tab object
-    # With it: suggestions_tab, = st.tabs([...]) unpacks to just the tab
+    suggestions_tab, shopping_cart_tab = st.tabs(["🔍 Suggestions","🛒 Shopping Cart"])
+
+    # Educational: st.tabs() returns a tuple; unpack to get individual tab objects
 
     # =============================================================================
     # SUGGESTIONS TAB CONTENT
@@ -395,6 +397,23 @@ with st.sidebar:
             # - Show sample products: st.write("Ask about headphones, laptops, cameras...")
             # - Show tips: st.write("💡 Try asking: 'best wireless headphones under $100'")
             # - Hide sidebar completely: if not used_context: st.sidebar.hide()
+
+
+    # =============================================================================
+    # SHOPPING CART TAB CONTENT
+    # =============================================================================
+    with shopping_cart_tab:
+        if st.session_state.shopping_cart:
+            for idx, item in enumerate(st.session_state.shopping_cart):
+                st.caption(item.get('description', 'No description'))
+                if 'product_image_url' in item:
+                    st.image(item["product_image_url"], width=250)
+                st.caption(f"Price: {item['price']} {item['currency']}")
+                st.caption(f"Quantity: {item['quantity']}")
+                st.caption(f"Total price: {item['total_price']} {item['currency']}")
+                st.divider()
+        else:
+            st.info("Your cart is empty")
 
 
 for idx, message in enumerate(st.session_state.messages):
@@ -510,7 +529,7 @@ if prompt := st.chat_input("Hello! How can I assist you today?"):
         message_placeholder = st.empty()
         stream_result = api_call_stream(
             "post",
-            f"{config.API_URL}/rag",
+            f"{config.API_URL}/agent",
             json={"query": prompt, "thread_id": session_id},
             headers={"Accept": "text/event-stream"},
         )
@@ -537,20 +556,22 @@ if prompt := st.chat_input("Hello! How can I assist you today?"):
                             status_placeholder.error(answer)
                             break
                         if output.get("type") == "final_answer":
-                            answer = output["data"]["answer"]
-                            used_context = output["data"]["used_context"]
-                            trace_id = output["data"]["trace_id"]
+                            answer = output["data"].get("answer", "")
+                            used_context = output["data"].get("used_context", [])
+                            trace_id = output["data"].get("trace_id", "")
+                            shopping_cart = output["data"].get("shopping_cart", [])
 
                             st.session_state.used_context = used_context
                             st.session_state.trace_id = trace_id
+                            st.session_state.shopping_cart = shopping_cart
 
                             st.session_state.latest_feedback = None
                             st.session_state.show_feedback_box = False
                             st.session_state.feedback_submission_status = None
 
                             status_placeholder.empty()
-                            message_placeholder.markdown(answer)
-                            logger.info("Received final_answer: trace_id=%s, used_context_len=%d", trace_id, len(used_context))
+                            message_placeholder.markdown(answer if answer else "_No response received._")
+                            logger.info("Received final_answer: trace_id=%s, used_context_len=%d, answer_len=%d", trace_id, len(used_context), len(answer or ""))
                             break
 
                     except json.JSONDecodeError:
@@ -560,7 +581,7 @@ if prompt := st.chat_input("Hello! How can I assist you today?"):
                         if status_text:
                             logger.info("Stream status: %s", status_text)
                             status_placeholder.markdown(f"*{status_text}*")
-                    
+
 
 
 

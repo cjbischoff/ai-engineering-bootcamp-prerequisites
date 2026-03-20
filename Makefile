@@ -68,6 +68,16 @@ smoke-test-verbose:
 	uv sync
 	uv run scripts/smoke_test.py --verbose
 
+# Target: test-agent
+# Purpose: Call agent API (POST /agent/) and validate Suggestions tab + Main page
+# When to use: Debugging coordinator agent, verifying API response
+# Usage: make test-agent
+#        make test-agent QUERY="add earphones to my cart"
+#        make test-agent STRICT=1   # Exit 1 if validation fails
+test-agent:
+	uv sync
+	uv run scripts/test_agent.py $(if $(QUERY),--query "$(QUERY)",) $(if $(STRICT),--strict,)
+
 # Target: smoke-test-postgres
 # Purpose: Verify Postgres (LangGraph checkpointer) is reachable and responds
 # When to use: After starting Docker, before running week4 notebook or any code using PostgresSaver
@@ -75,6 +85,21 @@ smoke-test-verbose:
 smoke-test-postgres:
 	uv sync
 	uv run scripts/smoke_test_postgres.py
+
+# Target: setup-shopping-cart
+# Purpose: Create tools_database and shopping_carts schema (Week 5 bootcamp spec)
+# When to use: First-time setup before running week5 notebook
+setup-shopping-cart:
+	-docker compose exec -T postgres psql -U langgraph_user -d postgres -c "CREATE DATABASE tools_database"
+	docker compose exec -T postgres psql -U langgraph_user -d tools_database < scripts/sql/shopping_cart_table.sql
+
+# Target: smoke-test-shopping-cart
+# Purpose: Verify shopping cart schema, table, and columns exist (Week 5)
+# When to use: Before running week5 notebook or add_to_shopping_cart tool
+# Output: Schema, table, and column checks for shopping_carts.shopping_cart_items
+smoke-test-shopping-cart:
+	uv sync
+	uv run scripts/smoke_test_shopping_cart.py
 
 # Target: smoke-test-mcp
 # Purpose: Verify MCP servers (items_mcp_server, reviews_mcp_server) are up and responding
