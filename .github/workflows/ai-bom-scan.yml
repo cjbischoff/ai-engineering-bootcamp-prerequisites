@@ -1,0 +1,38 @@
+# .github/workflows/ai-bom-scan.yml
+name: AI-BOM Scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  security-events: write
+  contents: read
+  pull-requests: write  # For PR comments if you add a comment step
+
+jobs:
+  ai-bom:
+    name: AI Component Inventory
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Scan for AI components
+        uses: trusera/ai-bom@v3.1.0   # Pin to a version, not @main
+        with:
+          format: sarif
+          output: ai-bom-results.sarif
+          fail-on: critical
+          scan-level: deep             # Enables AST mode: catches decorators, string literals
+          path: .
+
+      - name: Upload SARIF to Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ai-bom-results.sarif
+          category: ai-bom
+        if: always()   # Upload even on failure so you see what triggered it
