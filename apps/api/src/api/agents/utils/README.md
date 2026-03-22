@@ -8,7 +8,7 @@ This directory contains helper functions for prompt configuration management int
 
 ## Files
 
-```
+```text
 apps/api/src/api/agents/utils/
 ├── __init__.py                    # Makes directory a Python package
 ├── prompt_management.py           # Prompt loading utilities (Video 7)
@@ -31,12 +31,14 @@ apps/api/src/api/agents/utils/
 Loads a prompt template from a local YAML configuration file.
 
 **Parameters**:
+
 - `yaml_file: str` - Path to YAML file (relative to project root)
 - `prompt_key: str` - Key in YAML's `prompts:` dictionary
 
 **Returns**: `jinja2.Template` - Template object ready for rendering
 
 **Example**:
+
 ```python
 from api.agents.utils.prompt_management import prompt_template_config
 
@@ -56,12 +58,14 @@ print(prompt)
 ```
 
 **How It Works**:
+
 1. Opens YAML file and parses with `yaml.safe_load()`
 2. Extracts template content from `config["prompts"][prompt_key]`
 3. Creates Jinja2 `Template` object
 4. Returns template ready for `.render()`
 
 **File Path Considerations**:
+
 - Path is relative to **project root** (not current file)
 - Works in both local development and Docker containers
 - Docker working directory: `/app` with volume mount preserving structure
@@ -73,11 +77,13 @@ print(prompt)
 Loads a prompt template from the LangSmith prompt registry (cloud-based).
 
 **Parameters**:
+
 - `prompt_name: str` - Name of prompt in LangSmith registry (e.g., "retrieval-generation")
 
 **Returns**: `jinja2.Template` - Template object ready for rendering
 
 **Example**:
+
 ```python
 from api.agents.utils.prompt_management import prompt_template_registry
 
@@ -92,6 +98,7 @@ prompt = template.render(
 ```
 
 **How It Works**:
+
 1. Connects to LangSmith using `Client()` (requires `LANGCHAIN_API_KEY` env var)
 2. Pulls prompt with `ls_client.pull_prompt(prompt_name)`
 3. Extracts template from `.messages[0].prompt.template`
@@ -99,8 +106,10 @@ prompt = template.render(
 5. Returns template ready for `.render()`
 
 **Requirements**:
-- LangSmith account: https://smith.langchain.com
+
+- LangSmith account: [smith.langchain.com](https://smith.langchain.com)
 - Environment variables:
+
   ```bash
   export LANGCHAIN_API_KEY=<your-api-key>
   export LANGCHAIN_TRACING_V2=true
@@ -108,6 +117,7 @@ prompt = template.render(
   ```
 
 **Benefits**:
+
 - ✅ Cloud-based storage (no local files)
 - ✅ Team collaboration without Git
 - ✅ A/B testing with traffic splitting
@@ -115,6 +125,7 @@ prompt = template.render(
 - ✅ Performance analytics
 
 **Trade-offs**:
+
 - ❌ External dependency (network required)
 - ❌ Cost ($39/month for teams)
 - ✅ Local YAML fallback available
@@ -130,6 +141,7 @@ from langsmith import Client  # LangSmith integration
 ```
 
 **Install**:
+
 ```bash
 pip install pyyaml jinja2 langsmith
 # or with uv:
@@ -139,6 +151,7 @@ uv add pyyaml jinja2 langsmith
 ### Jinja2 Template Syntax
 
 **Variable Substitution**:
+
 ```jinja
 Context:
 {{ preprocessed_context }}
@@ -148,6 +161,7 @@ Question:
 ```
 
 **Conditional Logic** (not used in current prompts):
+
 ```jinja
 {% if include_reasoning %}
 Explain your reasoning step-by-step.
@@ -155,6 +169,7 @@ Explain your reasoning step-by-step.
 ```
 
 **Loops** (not used in current prompts):
+
 ```jinja
 {% for item in context_items %}
 - {{ item }}
@@ -185,6 +200,7 @@ prompts:
 ```
 
 **Key Points**:
+
 - `metadata:` section for documentation
 - `prompts:` dictionary can contain multiple templates
 - `|` operator preserves multiline formatting
@@ -193,6 +209,7 @@ prompts:
 ## Usage in RAG Pipeline
 
 **Before (Hardcoded in retrieval_generation.py)**:
+
 ```python
 def build_prompt(preprocessed_context, question):
     prompt = f"""
@@ -209,6 +226,7 @@ Question:
 ```
 
 **After (Template-Based)**:
+
 ```python
 from api.agents.utils.prompt_management import prompt_template_config
 
@@ -225,6 +243,7 @@ def build_prompt(preprocessed_context, question):
 ```
 
 **Changes**:
+
 - ❌ Removed 60+ lines of hardcoded prompt
 - ✅ Added 8 lines of template loading
 - ✅ Prompt now lives in YAML file (version control)
@@ -235,6 +254,7 @@ def build_prompt(preprocessed_context, question):
 ### YAML Loading Overhead
 
 **Per Request**:
+
 - File I/O: ~1ms
 - YAML parsing: ~1ms
 - Template creation: <1ms
@@ -243,6 +263,7 @@ def build_prompt(preprocessed_context, question):
 ### Optimization: Template Caching
 
 **Current** (loads YAML every request):
+
 ```python
 def build_prompt(preprocessed_context, question):
     template = prompt_template_config(...)  # Loads YAML every time
@@ -250,6 +271,7 @@ def build_prompt(preprocessed_context, question):
 ```
 
 **Optimized** (cache template, load once):
+
 ```python
 from functools import lru_cache
 
@@ -266,6 +288,7 @@ def prompt_template_config_cached(yaml_file, prompt_key):
 ```
 
 **Impact**:
+
 - First call: ~3ms (load + parse)
 - Subsequent calls: <0.01ms (cache hit)
 - FastAPI hot reload: Cache invalidates automatically
@@ -275,16 +298,19 @@ def prompt_template_config_cached(yaml_file, prompt_key):
 ### Common Errors
 
 **1. File Not Found**:
+
 ```python
 FileNotFoundError: [Errno 2] No such file or directory: 'prompts/retrieval_generation.yaml'
 ```
 
 **Fix**: Use correct relative path from project root:
+
 ```python
 yaml_file = "apps/api/src/api/agents/prompts/retrieval_generation.yaml"
 ```
 
 **2. YAML Parsing Error**:
+
 ```python
 yaml.scanner.ScannerError: mapping values are not allowed here
 ```
@@ -292,6 +318,7 @@ yaml.scanner.ScannerError: mapping values are not allowed here
 **Fix**: Check YAML syntax (indentation, `|` for multilines)
 
 **3. Missing Prompt Key**:
+
 ```python
 KeyError: 'retrieval_generation'
 ```
@@ -299,6 +326,7 @@ KeyError: 'retrieval_generation'
 **Fix**: Verify key exists in YAML's `prompts:` dictionary
 
 **4. Missing Variables**:
+
 ```python
 jinja2.exceptions.UndefinedError: 'preprocessed_context' is undefined
 ```
@@ -350,7 +378,7 @@ def test_build_prompt_with_template():
 
 ### File Organization
 
-```
+```text
 apps/api/src/api/agents/prompts/
 ├── retrieval_generation.yaml       # RAG prompts
 ├── summarization.yaml              # Summary prompts
@@ -361,6 +389,7 @@ apps/api/src/api/agents/prompts/
 ### YAML Conventions
 
 **1. Always Include Metadata**:
+
 ```yaml
 metadata:
   name: Descriptive Name
@@ -372,11 +401,13 @@ metadata:
 ```
 
 **2. Use Semantic Versioning**:
+
 - `1.0.0` → `1.0.1` for bug fixes (typos, clarifications)
 - `1.0.0` → `1.1.0` for new features (new instructions)
 - `1.0.0` → `2.0.0` for breaking changes (different output format)
 
 **3. Document Variables**:
+
 ```yaml
 # Variables used in this template:
 # - preprocessed_context: Formatted product descriptions
@@ -393,6 +424,7 @@ prompts:
 ### Version Control
 
 **Commit Messages**:
+
 ```bash
 git commit -m "feat(prompts): update RAG prompt to include product ratings (v1.1.0)"
 git commit -m "fix(prompts): correct typo in system instructions (v1.0.1)"
@@ -400,6 +432,7 @@ git commit -m "refactor(prompts): change output format to JSON (v2.0.0)"
 ```
 
 **Git Workflow**:
+
 1. Make changes to YAML file
 2. Update version in metadata
 3. Test with smoke test (`make smoke-test`)
@@ -415,7 +448,7 @@ git commit -m "refactor(prompts): change output format to JSON (v2.0.0)"
 
 ## Further Reading
 
-- **Jinja2 Documentation**: https://jinja.palletsprojects.com/
-- **YAML Specification**: https://yaml.org/spec/1.2.2/
-- **LangSmith Prompts**: https://docs.smith.langchain.com/prompts
-- **Semantic Versioning**: https://semver.org/
+- **Jinja2 Documentation**: [jinja.palletsprojects.com](https://jinja.palletsprojects.com/)
+- **YAML Specification**: [YAML 1.2.2 spec](https://yaml.org/spec/1.2.2/)
+- **LangSmith Prompts**: [LangSmith prompts docs](https://docs.smith.langchain.com/prompts)
+- **Semantic Versioning**: [semver.org](https://semver.org/)
