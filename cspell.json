@@ -2,9 +2,25 @@
   "version": "0.2",
   "language": "en",
   "words": [
+    "FastMCP",
+    "fastmcp",
+    "groq",
     "ipynb",
+    "ipython",
+    "kernelspec",
+    "kwargs",
+    "langchain",
     "langgraph",
+    "langsmith",
+    "litellm",
+    "nbconvert",
+    "nbformat",
+    "pathlib",
     "prefilter",
-    "prefiltered"
+    "prefiltered",
+    "pydantic",
+    "pygments",
+    "qdrant",
+    "venv"
   ]
 }

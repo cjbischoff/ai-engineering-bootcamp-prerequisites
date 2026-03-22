@@ -45,7 +45,23 @@ dev = [
     "langgraph-checkpoint-postgres>=3.0.4",
     "psycopg[binary]>=3.3.2",
     "fastmcp>=3.0.2",
+    "litellm>=1.82.6",
 ]
+
+# ============================================================================
+# BASEDPYRIGHT (Cursor / VS Code Pyright language server)
+# ----------------------------------------------------------------------------
+# Why: Notebooks and the editor analyze imports against a Python environment.
+# Without an explicit venv, you may see false positives like
+# "Import litellm could not be resolved" even after `uv sync`, because the
+# analyzer was not pointed at .venv/site-packages.
+# What: venvPath + venv tell basedpyright to use ./.venv for third-party stubs
+# and packages (including dev-group deps such as litellm).
+# ============================================================================
+[tool.basedpyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.12"
 
 # ============================================================================
 # RUFF CONFIGURATION (Linting & Formatting)
