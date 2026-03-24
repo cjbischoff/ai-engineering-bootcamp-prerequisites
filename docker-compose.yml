@@ -1,3 +1,15 @@
+# Secret injection: .env may hold `op://...` references. Docker does not resolve those.
+# Compose substitutes ${VAR} from the host environment first, then from the project .env file.
+# Run `op run --env-file=".env" -- docker compose ...` (see Makefile) so the host has real values.
+
+x-secret-env: &secret-env
+  OPENAI_API_KEY: ${OPENAI_API_KEY}
+  GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+  GROQ_API_KEY: ${GROQ_API_KEY}
+  LANGSMITH_API_KEY: ${LANGSMITH_API_KEY}
+  COHERE_API_KEY: ${COHERE_API_KEY}
+  HF_TOKEN: ${HF_TOKEN}
+
 services:
   # Run Service
   api:
@@ -8,6 +20,8 @@ services:
       - 8000:8000
     env_file:
       - .env
+    environment:
+      <<: *secret-env
     restart: unless-stopped
     volumes:
       - ./apps/api/src:/app/apps/api/src
@@ -21,6 +35,8 @@ services:
       - 8501:8501
     env_file:
       - .env
+    environment:
+      <<: *secret-env
     restart: unless-stopped
     volumes:
       - ./apps/chatbot_ui/src:/app/apps/chatbot_ui/src
@@ -55,6 +71,8 @@ services:
       - 8001:8000
     env_file:
       - .env
+    environment:
+      <<: *secret-env
     restart: unless-stopped
 
   reviews_mcp_server:
@@ -65,4 +83,6 @@ services:
       - 8002:8000
     env_file:
       - .env
+    environment:
+      <<: *secret-env
     restart: unless-stopped

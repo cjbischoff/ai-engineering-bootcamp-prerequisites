@@ -8,7 +8,10 @@ for the main RAG API.
 
 Verifies:
 - Ports 8001 and 8002 are listening (items and reviews MCP servers)
-- Each server responds to HTTP GET; accepts 200, 404, or 405 (MCP endpoints may only accept POST/SSE)
+- HTTP process responds (GET / may be 404/405)
+- GET /mcp returns quickly (405/406/etc. OK) — stronger signal than root alone
+
+Note: This does not invoke MCP tools; use the agent or MCP client for that.
 
 Usage:
     make smoke-test-mcp
@@ -16,7 +19,6 @@ Usage:
 """
 import socket
 import sys
-from typing import Tuple
 
 try:
     import requests
@@ -52,10 +54,10 @@ def print_failure(text: str) -> None:
 
 
 def print_info(text: str) -> None:
-    print(f"{Colors.BLUE}ℹ{Colors.RESET} {text}")
+    print(f"{Colors.BLUE}i{Colors.RESET} {text}")
 
 
-def check_port(port: int, service_name: str) -> Tuple[bool, str]:
+def check_port(port: int, service_name: str) -> tuple[bool, str]:
     """Return (success, message) for port listening on localhost."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.settimeout(2)
@@ -69,7 +71,20 @@ def check_port(port: int, service_name: str) -> Tuple[bool, str]:
         return False, f"Error checking port {port}: {e}"
 
 
-def check_mcp_http(base_url: str, name: str) -> Tuple[bool, str]:
+def check_mcp_path(base_url: str, name: str) -> tuple[bool, str]:
+    """Hit /mcp (FastMCP HTTP transport). Any HTTP response except connection error means server is up."""
+    try:
+        response = requests.get(f"{base_url}/mcp", timeout=HTTP_TIMEOUT)
+        return True, f"{name} /mcp reachable (HTTP {response.status_code})"
+    except requests.exceptions.ConnectionError:
+        return False, f"{name} /mcp connection refused"
+    except requests.exceptions.Timeout:
+        return False, f"{name} /mcp timed out"
+    except Exception as e:
+        return False, f"{name} /mcp error: {e}"
+
+
+def check_mcp_http(base_url: str, name: str) -> tuple[bool, str]:
     """GET base_url; accept 200, 404, 405 as server up. Return (success, message).
     MCP endpoints often only accept POST/SSE; 404 or 405 on GET still means the server is running."""
     try:
@@ -101,6 +116,10 @@ def run_smoke_test() -> bool:
     all_passed = all_passed and success
     (print_success if success else print_failure)(msg)
 
+    success, msg = check_mcp_path("http://localhost:8001", "items_mcp_server")
+    all_passed = all_passed and success
+    (print_success if success else print_failure)(msg)
+
     # reviews_mcp_server: port then HTTP
     success, msg = check_port(REVIEWS_MCP_PORT, "reviews_mcp_server")
     all_passed = all_passed and success
@@ -110,11 +129,17 @@ def run_smoke_test() -> bool:
     all_passed = all_passed and success
     (print_success if success else print_failure)(msg)
 
+    success, msg = check_mcp_path("http://localhost:8002", "reviews_mcp_server")
+    all_passed = all_passed and success
+    (print_success if success else print_failure)(msg)
+
     print()
     if all_passed:
-        print_success("✅ MCP smoke test PASSED")
+        print_success("MCP smoke test PASSED (ports + HTTP + /mcp)")
     else:
-        print_failure("❌ MCP smoke test FAILED")
+        print_failure("MCP smoke test FAILED")
+        print_info("Next: `docker compose logs items_mcp_server` / `reviews_mcp_server`")
+        print_info("Next: `make health` for full stack status")
 
     return all_passed
 

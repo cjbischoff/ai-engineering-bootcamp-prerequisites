@@ -330,7 +330,7 @@ The notebook implements a complete ETL (Extract, Transform, Load) pipeline for p
 - **Description Creation**: Combines product `title` and `features` into a single searchable description
   - Concatenates title with all feature bullet points
   - Creates rich, keyword-dense text for better semantic matching
-  - Example: "RAVODOI USB C Cable... 【Fast Charging Cord】... 【Universal Compatibility】..."
+  - Example: "USB-C cable listing... 【Fast Charging Cord】... 【Universal Compatibility】..."
 
 - **Image Extraction**: Extracts the first large image URL from each product's image array
   - Uses `.get("large", "")` for safe extraction with fallback
@@ -454,7 +454,7 @@ PointStruct(
 qdrant_client.upsert(
     collection_name="Amazon-items-collection-00",
     wait=True,  # Wait for indexing to complete
-    points=pointstructs
+    points=point_list,  # list[PointStruct] from your ingestion loop
 )
 ```
 
@@ -744,9 +744,9 @@ def process_context(context):
 **Example Output:**
 
 ```text
-- ID: B0C142QS8X, rating: 4.5, description: TUNEAKE Kids Headphones...
-- ID: B0B67ZFRPC, rating: 3.7, description: QearFun Cat Earbuds...
-- ID: B08XYZMQ2Y, rating: 4.6, description: Sony WH-1000XM4...
+- ID: B0C142QS8X, rating: 4.5, description: Kids Bluetooth headphones...
+- ID: B012345678, rating: 3.7, description: Cat-ear Bluetooth earbuds...
+- ID: B098765432, rating: 4.6, description: Sony WH-1000XM4...
 ```
 
 #### 5. Prompt Construction Function
@@ -880,7 +880,7 @@ print(answer)
 **Expected Output:**
 
 ```text
-You can get the TUNEAKE Kids Headphones (ID: B0C142QS8X) which have a rating
+You can get the kids Bluetooth headphones (ID: B0C142QS8X) which have a rating
 of 4.5. These are over-ear headphones designed for kids, featuring
 volume-limiting technology for hearing protection, a comfortable fit, and a
 foldable design for easy storage. They are compatible with all devices that
@@ -1428,7 +1428,7 @@ print(response.json())
 ```json
 {
   "request_id": "bf802801-da21-4b61-a10c-e700d4aafe2e",
-  "answer": "Based on the available products, I recommend the Sony WH-1000XM4 wireless headphones (ID: B08XYZMQ2Y) with a rating of 4.6. These headphones feature industry-leading noise cancellation, exceptional sound quality, and up to 30 hours of battery life."
+  "answer": "Based on the available products, I recommend the Sony WH-1000XM4 wireless headphones (ID: B098765432) with a rating of 4.6. These headphones feature industry-leading noise cancellation, exceptional sound quality, and up to 30 hours of battery life."
 }
 ```
 

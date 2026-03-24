@@ -67,7 +67,7 @@ def print_failure(text: str) -> None:
 
 
 def print_info(text: str) -> None:
-    print(f"{Colors.BLUE}ℹ{Colors.RESET} {text}")
+    print(f"{Colors.BLUE}i{Colors.RESET} {text}")
 
 
 def run_smoke_test() -> bool:
@@ -82,61 +82,63 @@ def run_smoke_test() -> bool:
     all_passed = True
 
     try:
-        with psycopg.connect(CONN_STRING) as conn:
-            with conn.cursor() as cur:
-                # 1. Database responds
-                cur.execute("SELECT 1")
-                if cur.fetchone()[0] != 1:
-                    print_failure("Database did not respond to SELECT 1")
-                    all_passed = False
-                else:
-                    print_success("Database responding (SELECT 1)")
+        with psycopg.connect(CONN_STRING) as conn, conn.cursor() as cur:
+            # 1. Database responds
+            cur.execute("SELECT 1")
+            if cur.fetchone()[0] != 1:
+                print_failure("Database did not respond to SELECT 1")
+                all_passed = False
+            else:
+                print_success("Database responding (SELECT 1)")
 
-                # 2. Schema exists
-                cur.execute(
-                    "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
-                    ("shopping_carts",),
-                )
-                if cur.fetchone() is None:
-                    print_failure("Schema 'shopping_carts' does not exist")
-                    all_passed = False
-                else:
-                    print_success("Schema 'shopping_carts' exists")
+            # 2. Schema exists
+            cur.execute(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
+                ("shopping_carts",),
+            )
+            if cur.fetchone() is None:
+                print_failure("Schema 'shopping_carts' does not exist")
+                all_passed = False
+            else:
+                print_success("Schema 'shopping_carts' exists")
 
-                # 3. Table exists
-                cur.execute(
-                    """
-                    SELECT 1 FROM information_schema.tables
-                    WHERE table_schema = %s AND table_name = %s
-                    """,
-                    ("shopping_carts", "shopping_cart_items"),
-                )
-                if cur.fetchone() is None:
-                    print_failure("Table 'shopping_carts.shopping_cart_items' does not exist")
-                    all_passed = False
-                else:
-                    print_success("Table 'shopping_carts.shopping_cart_items' exists")
+            # 3. Table exists
+            cur.execute(
+                """
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = %s AND table_name = %s
+                """,
+                ("shopping_carts", "shopping_cart_items"),
+            )
+            if cur.fetchone() is None:
+                print_failure("Table 'shopping_carts.shopping_cart_items' does not exist")
+                all_passed = False
+            else:
+                print_success("Table 'shopping_carts.shopping_cart_items' exists")
 
-                # 4. Required columns exist
-                cur.execute(
-                    """
-                    SELECT column_name FROM information_schema.columns
-                    WHERE table_schema = %s AND table_name = %s
-                    """,
-                    ("shopping_carts", "shopping_cart_items"),
-                )
-                actual_columns = frozenset(row[0] for row in cur.fetchall())
-                missing = REQUIRED_COLUMNS - actual_columns
-                extra = actual_columns - REQUIRED_COLUMNS
+            # 4. Required columns exist
+            cur.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = %s AND table_name = %s
+                """,
+                ("shopping_carts", "shopping_cart_items"),
+            )
+            actual_columns = frozenset(row[0] for row in cur.fetchall())
+            missing = REQUIRED_COLUMNS - actual_columns
+            extra = actual_columns - REQUIRED_COLUMNS
 
-                if missing:
-                    print_failure(f"Missing columns: {', '.join(sorted(missing))}")
-                    all_passed = False
-                else:
-                    print_success(f"All required columns exist ({len(REQUIRED_COLUMNS)} columns)")
-
-                if extra and not missing:
+            if missing:
+                print_failure(f"Missing columns: {', '.join(sorted(missing))}")
+                all_passed = False
+            else:
+                print_success(f"All required columns exist ({len(REQUIRED_COLUMNS)} columns)")
+                if extra:
                     print_info(f"Additional columns (OK): {', '.join(sorted(extra))}")
+                # 5. Row count (informational; only when schema matches)
+                cur.execute("SELECT COUNT(*) FROM shopping_carts.shopping_cart_items")
+                nrows = cur.fetchone()[0]
+                print_info(f"shopping_cart_items rows: {nrows:,} (0 is OK for empty cart)")
 
     except psycopg.OperationalError as e:
         print_failure(f"Cannot connect to Postgres: {e}")

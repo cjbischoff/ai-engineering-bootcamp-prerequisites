@@ -2,11 +2,11 @@
 """
 Smoke Test Script for AI Engineering Bootcamp RAG Pipeline
 
-Runs end-to-end test of the RAG pipeline to verify:
-- API endpoint responds correctly (streaming SSE)
-- Response structure matches Pydantic models (answer, used_context)
-- Product context includes required fields
-- Response time is acceptable
+Runs end-to-end test of the agent pipeline to verify:
+- POST /agent/ responds with SSE (200)
+- final_answer JSON contains answer, used_context (product-shaped dicts)
+- Answer non-empty and retrieval returned at least one context item
+- End-to-end latency (first request to final_answer) within a reasonable bound
 
 STREAMING SUPPORT (Week 4 / Sprint 3):
 --------------------------------------
@@ -26,11 +26,11 @@ Usage:
     uv run scripts/smoke_test.py --verbose  # Verbose mode
 """
 
+import argparse
+import json
 import sys
 import time
-import json
-import argparse
-from typing import Tuple, Dict, Any
+from typing import Any
 
 try:
     import requests
@@ -67,15 +67,24 @@ def print_failure(text: str):
 
 def print_info(text: str):
     """Print info message."""
-    print(f"{Colors.CYAN}ℹ{Colors.RESET} {text}")
+    print(f"{Colors.CYAN}i{Colors.RESET} {text}")
 
 
-def print_json(data: Dict[Any, Any]):
+def print_next_steps() -> None:
+    """When smoke fails, suggest what to run next."""
+    print_header("Suggested next steps")
+    print(f"  {Colors.CYAN}•{Colors.RESET} `make health` — containers, Qdrant hybrid collection, API OpenAPI")
+    print(f"  {Colors.CYAN}•{Colors.RESET} `docker compose logs -f api` — stack traces, LiteLLM/OpenAI errors")
+    print(f"  {Colors.CYAN}•{Colors.RESET} `op signin` then `make run-docker-compose` if using 1Password for API keys")
+    print(f"  {Colors.CYAN}•{Colors.RESET} `uv run scripts/test_agent.py --query \"...\"` — reproduce without Streamlit")
+
+
+def print_json(data: dict[Any, Any]):
     """Pretty-print JSON data."""
     print(json.dumps(data, indent=2))
 
 
-def validate_response_structure(response_data: Dict[Any, Any]) -> Tuple[bool, str]:
+def validate_response_structure(response_data: dict[Any, Any]) -> tuple[bool, str]:
     """
     Validate that response matches RAGResponse Pydantic model structure.
 
@@ -112,13 +121,15 @@ def validate_response_structure(response_data: Dict[Any, Any]) -> Tuple[bool, st
             return False, f"used_context[{idx}] missing 'description' field"
 
         # image_url and price are optional, but if present, check types
-        if "image_url" in item and item["image_url"] is not None:
-            if not isinstance(item["image_url"], str):
-                return False, f"used_context[{idx}].image_url must be string or null"
+        if "image_url" in item and item["image_url"] is not None and not isinstance(
+            item["image_url"], str
+        ):
+            return False, f"used_context[{idx}].image_url must be string or null"
 
-        if "price" in item and item["price"] is not None:
-            if not isinstance(item["price"], (int, float)):
-                return False, f"used_context[{idx}].price must be number or null"
+        if "price" in item and item["price"] is not None and not isinstance(
+            item["price"], (int, float)
+        ):
+            return False, f"used_context[{idx}].price must be number or null"
 
     return True, f"Valid structure with {len(response_data['used_context'])} products"
 
@@ -134,43 +145,45 @@ def run_smoke_test(query: str, verbose: bool = False) -> bool:
     Returns:
         bool: True if test passed, False otherwise
     """
-    print_header(f"🧪 Smoke Test: RAG Pipeline")
+    print_header("Smoke Test: Agent pipeline (POST /agent/)")
     print_info(f"Query: {query}")
 
     all_passed = True
 
-    # Test 1: API responds (streaming SSE)
+    # Test 1: API responds (streaming SSE); elapsed = until final_answer (not just TTFB)
+    start_time = time.time()
     try:
-        start_time = time.time()
         # thread_id required by API (LangGraph checkpointing); fixed ID for reproducible smoke run.
-        # stream=True: API returns text/event-stream; we consume SSE events.
         response = requests.post(
             "http://localhost:8000/agent/",
             json={"query": query, "thread_id": "smoke-test"},
             headers={"Accept": "text/event-stream"},
             stream=True,
-            timeout=60,
+            timeout=120,
         )
-        elapsed = time.time() - start_time
 
         if response.status_code != 200:
             print_failure(f"API returned status {response.status_code}")
             print(f"Response: {response.text[:500]}")
+            print_next_steps()
             return False
-        print_success(f"API responded with status 200 in {elapsed:.2f}s")
 
     except requests.exceptions.ConnectionError:
         print_failure("Cannot connect to API (is it running?)")
+        print_next_steps()
         return False
     except requests.exceptions.Timeout:
-        print_failure("Request timed out (> 60 seconds)")
+        print_failure("Request timed out (> 120 seconds)")
+        print_next_steps()
         return False
     except Exception as e:
-        print_failure(f"Error making request: {str(e)}")
+        print_failure(f"Error making request: {e!s}")
+        print_next_steps()
         return False
 
     # Test 2: Consume SSE stream and extract final_answer
     response_data = None
+    elapsed = 0.0
     try:
         request_id = response.headers.get("X-Request-ID", "unknown")
         for line in response.iter_lines(decode_unicode=True):
@@ -184,22 +197,28 @@ def run_smoke_test(query: str, verbose: bool = False) -> bool:
                         payload = parsed.get("data", {})
                         response_data = {
                             "request_id": request_id,
+                            "trace_id": payload.get("trace_id") or "",
                             "answer": payload.get("answer", ""),
                             "used_context": payload.get("used_context", []),
                         }
+                        elapsed = time.time() - start_time
                         break
                     if isinstance(parsed, dict) and parsed.get("type") == "error":
                         err_msg = parsed.get("data", {}).get("message", "Unknown error")
                         print_failure(f"Stream error: {err_msg}")
+                        print_next_steps()
                         return False
                 except json.JSONDecodeError:
                     pass  # Plain text status (e.g. "Analysing the question...")
         if response_data is None:
+            elapsed = time.time() - start_time
             print_failure("No final_answer event in stream")
+            print_next_steps()
             return False
-        print_success("Response is valid JSON (from SSE stream)")
+        print_success(f"SSE final_answer received (wall time {elapsed:.2f}s, X-Request-ID={request_id})")
     except Exception as e:
-        print_failure(f"Response is not valid JSON: {str(e)}")
+        print_failure(f"Error parsing SSE stream: {e!s}")
+        print_next_steps()
         return False
 
     # Test 3: Response structure matches Pydantic model
@@ -210,13 +229,14 @@ def run_smoke_test(query: str, verbose: bool = False) -> bool:
         print_failure(f"Response structure invalid: {message}")
         all_passed = False
 
-    # Test 4: Response time acceptable
-    # Note: First query may be slower due to model initialization (cold start)
-    # We use 20s threshold to account for embedding + retrieval + LLM generation
-    if elapsed < 20.0:
-        print_success(f"Response time acceptable: {elapsed:.2f}s < 20.0s")
+    # Test 4: Response time (full stream, multi-agent + retrieval + LLM)
+    # Cold start and coordinator loops can exceed 20s; treat as soft/strict bands.
+    if elapsed < 45.0:
+        print_success(f"Latency OK: {elapsed:.2f}s (< 45s target for full agent run)")
+    elif elapsed < 90.0:
+        print_info(f"Latency elevated: {elapsed:.2f}s (acceptable; watch for regressions)")
     else:
-        print_failure(f"Response time slow: {elapsed:.2f}s >= 20.0s")
+        print_failure(f"Latency high: {elapsed:.2f}s (>= 90s) — check API logs / provider slowness")
         all_passed = False
 
     # Test 5: Answer is non-empty
@@ -236,11 +256,13 @@ def run_smoke_test(query: str, verbose: bool = False) -> bool:
 
     # Print response details
     if verbose:
-        print_header("📄 Full Response")
+        print_header("Full Response")
         print_json(response_data)
     else:
-        print_header("📄 Response Summary")
+        print_header("Response Summary")
         print(f"Request ID: {response_data.get('request_id', 'N/A')}")
+        tid = response_data.get("trace_id") or "(none)"
+        print(f"Trace ID: {tid}")
         print(f"Answer: {response_data.get('answer', '')[:150]}...")
         print(f"Products: {context_count}")
 
@@ -254,9 +276,10 @@ def run_smoke_test(query: str, verbose: bool = False) -> bool:
     # Summary
     print()
     if all_passed:
-        print_success("✅ Smoke test PASSED - RAG pipeline is working correctly")
+        print_success("Smoke test PASSED — agent returned answer + product context")
     else:
-        print_failure("❌ Smoke test FAILED - See errors above")
+        print_failure("Smoke test FAILED — see errors above")
+        print_next_steps()
 
     return all_passed
 

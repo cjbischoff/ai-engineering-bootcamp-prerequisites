@@ -18,6 +18,7 @@ Useful for debugging without the Streamlit UI. Run with API and services up:
 import argparse
 import json
 import sys
+import time
 
 try:
     import requests
@@ -77,7 +78,7 @@ def main():
             timeout=args.timeout,
         )
     except requests.exceptions.ConnectionError:
-        print("❌ Cannot connect. Is the API running? (make run-docker-compose)")
+        print("❌ Cannot connect. Is the API running? (`make run-docker-compose`, `make health`)")
         sys.exit(1)
     except requests.exceptions.Timeout:
         print("❌ Request timed out")
@@ -89,6 +90,7 @@ def main():
 
     print(f"✓ Status {response.status_code}\n")
 
+    t0 = time.perf_counter()
     final_answer = None
     for line in response.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
@@ -111,6 +113,8 @@ def main():
             # Plain text status
             if data:
                 print(f"  {data}")
+
+    elapsed = time.perf_counter() - t0
 
     if not final_answer:
         print("❌ No final_answer in stream")
@@ -138,6 +142,7 @@ def main():
     )
 
     print(f"\n{BOLD}--- RESULT ---{RESET}")
+    print(f"Wall time (to final_answer): {elapsed:.2f}s")
     print(f"Answer ({len(answer)} chars):")
     print(answer[:500] + "..." if answer and len(answer) > 500 else (answer or "(empty)"))
     print(f"\nTrace ID: {trace_id or '(empty)'}")

@@ -10,6 +10,16 @@
 #   make smoke-test            # Test RAG pipeline end-to-end
 #   make clean-notebook-outputs # Clean Jupyter outputs
 #   make run-evals-retriever   # Run RAG evaluation
+#
+# 1Password: if the 1Password CLI (`op`) is installed and .env uses op:// references,
+# Make prefixes docker/uv with `op run --env-file=".env" --` so secrets resolve on the host
+# and docker-compose.yml can pass them into containers (see docker-compose.yml).
+
+ifeq ($(shell command -v op >/dev/null 2>&1 && echo yes),yes)
+  OP_RUN = op run --env-file="$(CURDIR)/.env" --
+else
+  OP_RUN =
+endif
 
 # Target: run-docker-compose
 # Purpose: Start the full application stack (API, UI, Qdrant) in Docker
@@ -17,11 +27,11 @@
 run-docker-compose:
 	# Step 1: Sync dependencies
 	# Why? Ensures all required packages are installed before building
-	uv sync
+	$(OP_RUN) uv sync
 	# Step 2: Build and start all Docker containers
 	# --build: Rebuild images to pick up code changes
 	# This starts: FastAPI backend, Streamlit UI, Qdrant vector DB
-	docker compose up --build
+	$(OP_RUN) docker compose up --build
 
 # Target: clean-notebook-outputs
 # Purpose: Remove all cell outputs from Jupyter notebooks before committing
@@ -50,8 +60,15 @@ health-silent:
 	uv sync
 	uv run scripts/health_check.py --silent
 
+# Target: health-strict
+# Purpose: Same as health but fail if psycopg is missing (Postgres not actually verified)
+# When to use: CI or when you require LangGraph DB check to run, not be skipped
+health-strict:
+	uv sync
+	uv run scripts/health_check.py --strict
+
 # Target: smoke-test
-# Purpose: Run end-to-end test of RAG pipeline with real query
+# Purpose: End-to-end agent pipeline test (POST /agent/, SSE final_answer)
 # When to use: After code changes, before deployment, or when debugging
 # Output: Test results with response summary
 smoke-test:

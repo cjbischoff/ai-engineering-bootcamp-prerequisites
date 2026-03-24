@@ -48,7 +48,7 @@ def print_failure(text: str) -> None:
 
 
 def print_info(text: str) -> None:
-    print(f"{Colors.BLUE}ℹ{Colors.RESET} {text}")
+    print(f"{Colors.BLUE}i{Colors.RESET} {text}")
 
 
 def check_checkpoints_table(conn) -> bool:
@@ -83,11 +83,19 @@ def run_smoke_test() -> bool:
                     print_failure("Unexpected result from SELECT 1")
                     all_passed = False
 
-            # 3. Optional: checkpoint table exists (informational only)
+            # 3. Checkpoint table + row count (informational: 0 rows is OK before first agent turn)
             if check_checkpoints_table(conn):
-                print_success("LangGraph checkpoint table exists (checkpoints)")
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT COUNT(*) FROM checkpoints")
+                        n = cur.fetchone()[0]
+                    print_success(f"LangGraph checkpoints table: {n:,} row(s)")
+                    if n == 0:
+                        print_info("No checkpoints yet (expected before first /agent/ conversation with saver)")
+                except Exception as ex:
+                    print_info(f"Could not COUNT checkpoints: {ex}")
             else:
-                print_info("LangGraph checkpoint table not found (run PostgresSaver.setup() in notebook if needed)")
+                print_info("Table `checkpoints` not found — run PostgresSaver.setup() once if using LangGraph persistence")
     except psycopg.OperationalError as e:
         print_failure(f"Cannot connect to Postgres: {e}")
         all_passed = False
@@ -97,9 +105,10 @@ def run_smoke_test() -> bool:
 
     print()
     if all_passed:
-        print_success("✅ Postgres smoke test PASSED")
+        print_success("Postgres smoke test PASSED")
     else:
-        print_failure("❌ Postgres smoke test FAILED")
+        print_failure("Postgres smoke test FAILED")
+        print_info("Next: `docker compose ps postgres` and `docker compose logs postgres`")
 
     return all_passed
 

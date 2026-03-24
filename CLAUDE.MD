@@ -48,35 +48,66 @@ ai-engineering-bootcamp-prerequisites_me/
 
 ### Development Workflow
 
+**Note:** All commands that need API keys should be prefixed with `op run --env-file=".env" --`
+
 | Command | Purpose |
 |---------|---------|
-| `make run-docker-compose` | Sync dependencies and start all services |
-| `make health` | Verify infrastructure health (containers, ports, collections) |
-| `make health-silent` | Health check (only show failures) |
-| `make smoke-test` | Run end-to-end RAG pipeline test |
-| `make smoke-test-verbose` | Smoke test with full JSON response |
-| `make clean-notebook-outputs` | Clean Jupyter notebook outputs before commit |
-| `make run-evals-retriever` | Run RAGAS evaluation metrics |
+| `op run --env-file=".env" -- make run-docker-compose` | Sync dependencies and start all services |
+| `op run --env-file=".env" -- make health` | Verify infrastructure health (containers, ports, collections) |
+| `op run --env-file=".env" -- make health-silent` | Health check (only show failures) |
+| `op run --env-file=".env" -- make smoke-test` | End-to-end **agent** test (`POST /agent/`, SSE `final_answer`) |
+| `op run --env-file=".env" -- make smoke-test-verbose` | Same with full JSON payload |
+| `make clean-notebook-outputs` | Clean Jupyter notebook outputs before commit (no secrets needed) |
+| `op run --env-file=".env" -- make run-evals-retriever` | Run RAGAS evaluation metrics |
+
+**Makefile + Docker:** `make run-docker-compose` runs `uv sync` and `docker compose up` under `op run --env-file="$(CURDIR)/.env" --` when the `op` CLI is on your `PATH`. Compose merges `env_file: .env` with `environment: ${VAR}` blocks so containers get **resolved** secrets from the host (see `docker-compose.yml` header comments). For host-only scripts (`make health`), `op` is optional unless your `.env` holds literal `op://` references and no plaintext fallback.
+
+**Health vs smoke:** `make health` checks containers, **Qdrant `Amazon-items-collection-01-hybrid-search`**, `GET /openapi.json`, Postgres (if `psycopg` installed), and MCP ports. Use `make health-strict` to fail when Postgres cannot be checked. `make smoke-test` validates a real coordinator path through the API.
 
 ### Environment Setup
 
-```bash
-# Initial setup
-cp env.example .env
-# Edit .env with your API keys
+**This project uses 1Password for secure secret management.**
 
-# Install dependencies
+```bash
+# 1. Install 1Password CLI (if not already installed)
+brew install --cask 1password-cli
+
+# 2. Authenticate with 1Password
+op signin
+
+# 3. The .env file already contains 1Password secret references
+# No need to manually copy API keys!
+
+# 4. Install dependencies
 make install
 
-# Start services
-make up
+# 5. Run commands with 1Password injection
+op run --env-file=".env" -- make run-docker-compose
+op run --env-file=".env" -- make health
+op run --env-file=".env" -- make smoke-test
+```
+
+**Alternative: Manual API Keys (Not Recommended)**
+
+If you prefer not to use 1Password:
+```bash
+cp env.example .env
+# Edit .env with your actual API keys
+# ⚠️  WARNING: Never commit .env with real keys!
 ```
 
 ### API Keys Required
 
-- `OPENAI_KEY` - OpenAI API (optional, quota may be exceeded)
-- `GOOGLE_API_KEY` - Google GenAI (recommended)
-- `GROQ_API_KEY` - Groq API (recommended)
+All API keys are stored in 1Password Personal vault:
+
+| Environment Variable | 1Password Item | Description |
+|---------------------|----------------|-------------|
+| `OPENAI_API_KEY` | `api_openai` | OpenAI API (embeddings & LLM) |
+| `GOOGLE_API_KEY` | `api_google_fullaccess` | Google GenAI (alternative LLM) |
+| `GROQ_API_KEY` | `api_groq_fullaccess` | Groq (fast inference) |
+| `LANGSMITH_API_KEY` | `api_langsmith_fullaccess` | LangSmith (observability) |
+| `COHERE_API_KEY` | `api_cohere_fullaccess` | Cohere (reranking) |
+| `HF_TOKEN` | `api_huggingface_read` | HuggingFace (model downloads) |
 
 ---
 
@@ -336,9 +367,18 @@ gh pr checks sprint/2     # View CI/review checks
 
 ### Security Rules
 
-- ⚠️ **NEVER commit `.env` file** - Contains API keys
+- ✅ **Use 1Password for secrets** - All API keys stored in 1Password Personal vault
+- ✅ **1Password CLI injection** - Run commands with `op run --env-file=".env" --`
+- ✅ **`.env` contains references only** - Format: `op://Personal/api_vendor_fullaccess/credential`
+- ⚠️ **NEVER commit actual API keys** — `.env` is **gitignored**; keep it local even when it holds only `op://` references (those still reveal vault/item names).
 - ⚠️ **Use `env.example`** - Template for required environment variables
-- ⚠️ **API Keys in `.env` only** - Never hardcode in source files
+- ⚠️ **API Keys in 1Password only** - Never hardcode in source files
+
+**1Password Naming Convention:**
+- Vault: `Personal`
+- Item Type: `API Credential`
+- Item Name: `api_vendor_permissions` (e.g., `api_openai`, `api_google_fullaccess`)
+- Field: `credential`
 
 ---
 
@@ -346,11 +386,25 @@ gh pr checks sprint/2     # View CI/review checks
 
 ### Adding New LLM Provider
 
-1. Update backend provider configuration in `apps/api/`
-2. Add provider-specific client initialization
-3. Update frontend provider selection UI in `apps/client/`
-4. Add new API key to `env.example` and `.env`
-5. Document provider setup in README.md
+1. **Add API key to 1Password:**
+   ```bash
+   op item create \
+     --category="API Credential" \
+     --vault=Personal \
+     --title="api_provider_fullaccess" \
+     "credential[password]=your-api-key-here"
+   ```
+
+2. **Update `.env` with 1Password reference:**
+   ```bash
+   PROVIDER_API_KEY=op://Personal/api_provider_fullaccess/credential
+   ```
+
+3. **Update backend provider configuration** in `apps/api/`
+4. **Add provider-specific client initialization**
+5. **Update frontend provider selection UI** in `apps/client/`
+6. **Add new API key to `env.example`** with documentation
+7. **Document provider setup** in README.md
 
 ### Working with Vector Database
 

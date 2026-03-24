@@ -19,6 +19,12 @@ from hand-rolled history).
 **Structured outputs:** ``instructor`` constrains completions to Pydantic models (tool_calls,
 final_answer, references, etc.) so the graph can route deterministically.
 
+**LiteLLM (Week 6 / Sprint 5):** Nodes use ``instructor.from_litellm(completion)`` so each
+``model`` string (e.g. ``gpt-4.1``, ``groq/llama-3.3-70b-versatile``) routes to the right
+vendor via LiteLLM. Prompt YAML files use **top-level keys that match those model strings**;
+each node loops over ``models=``, tries ``create_with_completion`` until one succeeds, and
+raises ``RuntimeError`` if every provider fails (mirrors the Week 6 notebook fallback pattern).
+
 **Observability:** ``@traceable`` sends spans to LangSmith; ``logging`` INFO lines summarize
 each node output for Docker logs (iteration, tools, coordinator message tail types).
 
@@ -27,11 +33,12 @@ Course refs: Week 5 notebooks (coordinator, cart, warehouse), Sprint 2 multi-age
 import logging
 import instructor
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 from jinja2 import Template
 from langchain_core.messages import AIMessage, convert_to_openai_messages
 from langsmith import traceable,get_current_run_tree
+from litellm import completion
 from openai import OpenAI
 
 from api.agents.utils.prompt_management import prompt_template_config
@@ -136,27 +143,43 @@ class WarehouseManagerAgentResponse(BaseModel):
     run_type="llm",
     metadata={"ls_provider": "openai", "ls_model_name": "gpt-4.1"}
 )
-def product_qa_agent(state) -> dict:
+def product_qa_agent(state, models=["gpt-4.1", "groq/llama-3.3-70b-versatile"])-> dict:
     """
     ReAct agent node: receives messages + tool descriptions, returns answer and/or tool_calls.
     If tool_calls non-empty -> graph routes to tool_node. If final_answer -> graph ends.
     """
-    template = prompt_template_config(str(_PROMPTS_DIR / "product_qa_agent.yaml"), "product_qa_agent")
-    prompt = template.render(available_tools=state.product_qa_agent.available_tools)
+
+    prompts = {}
+    for model in models:
+        prompts[model] = prompt_template_config(str(_PROMPTS_DIR / "product_qa_agent.yaml"), model).render(available_tools=state.product_qa_agent.available_tools)
 
     messages = state.messages
 
     # One OpenAI-format dict per LangChain message (handles tool_calls + ToolMessage correctly).
     conversation = [convert_to_openai_messages(m) for m in messages]
 
-    client = instructor.from_openai(OpenAI())
+    client = instructor.from_litellm(completion)
 
-    response, raw_response = client.chat.completions.create_with_completion(
-        model="gpt-4.1",
-        response_model=ProductQAAgentResponse,
-        messages=[{"role": "system", "content": prompt}, *conversation],
-        temperature=0.5,
-    )
+    response: ProductQAAgentResponse | None = None
+    raw_response: Any = None
+    for model in models:
+        try:
+            response, raw_response = client.chat.completions.create_with_completion(
+                model=model,
+                response_model=ProductQAAgentResponse,
+                messages=[{"role": "system", "content": prompts[model]}, *conversation],
+                temperature=0.5,
+            )
+            break
+        except Exception as e:
+            logger.error("Error with model %s: %s", model, e)
+            continue
+
+    if response is None or raw_response is None:
+        raise RuntimeError(
+            "product_qa_agent: all models failed or models list was empty; "
+            f"models_tried={models!r}"
+        )
 
     current_run = get_current_run_tree()
 
@@ -166,8 +189,6 @@ def product_qa_agent(state) -> dict:
             "output_tokens": raw_response.usage.completion_tokens,
             "total_tokens": raw_response.usage.total_tokens
         }
-
-
 
     ai_message = format_ai_message(response)
     tool_names = [tc.name for tc in response.tool_calls]
@@ -199,7 +220,7 @@ def product_qa_agent(state) -> dict:
     run_type="llm",
     metadata={"ls_provider": "openai", "ls_model_name": "gpt-4.1"}
 )
-def shopping_cart_agent(state) -> dict:
+def shopping_cart_agent(state, models=["gpt-4.1", "groq/llama-3.3-70b-versatile"]) -> dict:
     """
     Shopping cart agent node: handles add/remove/get cart requests.
 
@@ -207,25 +228,38 @@ def shopping_cart_agent(state) -> dict:
     Returns tool_calls when the user wants to add/remove items; final_answer when confirming.
     Graph routes to shopping_cart_agent_tool_node when tool_calls non-empty.
     """
-    template = prompt_template_config(str(_PROMPTS_DIR / "shopping_cart_agent.yaml"), "shopping_cart_agent")
-
-    prompt = template.render(
-        available_tools=state.shopping_cart_agent.available_tools,
-        user_id=state.user_id,
-        cart_id=state.cart_id
-    )
+    prompts = {}
+    for model in models:
+        prompts[model] = prompt_template_config(str(_PROMPTS_DIR / "shopping_cart_agent.yaml"), model).render(available_tools=state.shopping_cart_agent.available_tools, user_id=state.user_id, cart_id=state.cart_id)
 
     messages = state.messages
+
+    # One OpenAI-format dict per LangChain message (handles tool_calls + ToolMessage correctly).
     conversation = [convert_to_openai_messages(m) for m in messages]
 
-    client = instructor.from_openai(OpenAI())
+    client = instructor.from_litellm(completion)
 
-    response, raw_response = client.chat.completions.create_with_completion(
-        model="gpt-4.1",
-        response_model=ShoppingCartAgentResponse,
-        messages=[{"role": "system", "content": prompt}, *conversation],
-        temperature=0.5,
-    )
+    response: ShoppingCartAgentResponse | None = None
+    raw_response: Any = None
+    for model in models:
+        try:
+            response, raw_response = client.chat.completions.create_with_completion(
+                model=model,
+                response_model=ShoppingCartAgentResponse,
+                messages=[{"role": "system", "content": prompts[model]}, *conversation],
+                temperature=0.5,
+            )
+            break
+        except Exception as e:
+            logger.error("Error with model %s: %s", model, e)
+            continue
+
+    if response is None or raw_response is None:
+        raise RuntimeError(
+            "shopping_cart_agent: all models failed or models list was empty; "
+            f"models_tried={models!r}"
+        )
+
     current_run = get_current_run_tree()
 
     if current_run:
@@ -266,30 +300,47 @@ def shopping_cart_agent(state) -> dict:
     run_type="llm",
     metadata={"ls_provider": "openai", "ls_model_name": "gpt-4.1"}
 )
-def warehouse_manager_agent(state) -> dict:
+def warehouse_manager_agent(state, models=["gpt-4.1", "groq/llama-3.3-70b-versatile"]) -> dict:
     """Warehouse ReAct node: check availability, then reserve, then natural-language summary.
 
     State includes ``warehouse_manager_agent.available_tools`` (JSON tool specs for the prompt).
     The graph routes to ``warehouse_manager_agent_tool_node`` when ``tool_calls`` is non-empty;
     see ``warehouse_manager_agent_tool_edge`` in ``graph.py`` (order of checks matters).
     """
-    template = prompt_template_config(str(_PROMPTS_DIR / "warehouse_manager_agent.yaml"), "warehouse_manager_agent")
-
-    prompt = template.render(
-        available_tools=state.warehouse_manager_agent.available_tools,
-    )
+    prompts = {}
+    for model in models:
+        prompts[model] = prompt_template_config(
+            str(_PROMPTS_DIR / "warehouse_manager_agent.yaml"), model
+        ).render(available_tools=state.warehouse_manager_agent.available_tools)
 
     messages = state.messages
+
+    # One OpenAI-format dict per LangChain message (handles tool_calls + ToolMessage correctly).
     conversation = [convert_to_openai_messages(m) for m in messages]
 
-    client = instructor.from_openai(OpenAI())
+    client = instructor.from_litellm(completion)
 
-    response, raw_response = client.chat.completions.create_with_completion(
-        model="gpt-4.1",
-        response_model=WarehouseManagerAgentResponse,
-        messages=[{"role": "system", "content": prompt}, *conversation],
-        temperature=0.5,
-    )
+    response: WarehouseManagerAgentResponse | None = None
+    raw_response: Any = None
+    for model in models:
+        try:
+            response, raw_response = client.chat.completions.create_with_completion(
+                model=model,
+                response_model=WarehouseManagerAgentResponse,
+                messages=[{"role": "system", "content": prompts[model]}, *conversation],
+                temperature=0.5,
+            )
+            break
+        except Exception as e:
+            logger.error("Error with model %s: %s", model, e)
+            continue
+
+    if response is None or raw_response is None:
+        raise RuntimeError(
+            "warehouse_manager_agent: all models failed or models list was empty; "
+            f"models_tried={models!r}"
+        )
+
 
     current_run = get_current_run_tree()
 
@@ -330,7 +381,7 @@ def warehouse_manager_agent(state) -> dict:
     run_type="llm",
     metadata={"ls_provider": "openai", "ls_model_name": "gpt-4.1"}
 )
-def coordinator_agent(state):
+def coordinator_agent(state, models=["gpt-4.1", "groq/llama-3.3-70b-versatile"]) -> dict:
     """
     Coordinator agent node: entry point that plans and delegates to specialist agents.
 
@@ -342,26 +393,40 @@ def coordinator_agent(state):
     ``trace_id`` is copied from the active LangSmith run when present; else ``""`` so the
     API always returns a string (Streamlit feedback endpoint).
     """
-    prompt_template = prompt_template_config(str(_PROMPTS_DIR / "coordinator_agent.yaml"), "coordinator_agent")
-    prompt = prompt_template.render()
+    prompts = {}
+    for model in models:
+        prompts[model] = prompt_template_config(
+            str(_PROMPTS_DIR / "coordinator_agent.yaml"), model
+        ).render()
 
     messages = state.messages
+
+    # One OpenAI-format dict per LangChain message (handles tool_calls + ToolMessage correctly).
     conversation = [convert_to_openai_messages(m) for m in messages]
 
-    logger.info(
-        "agent coordinator_agent in messages=%s openai_messages=%s",
-        _summarize_messages_for_log(messages),
-        len(conversation),
-    )
+    client = instructor.from_litellm(completion)
 
-    client = instructor.from_openai(OpenAI())
+    response: CoordinatorAgentResponse | None = None
+    raw_response: Any = None
+    for model in models:
+        try:
+            response, raw_response = client.chat.completions.create_with_completion(
+                model=model,
+                response_model=CoordinatorAgentResponse,
+                messages=[{"role": "system", "content": prompts[model]}, *conversation],
+                temperature=0.5,
+            )
+            break
+        except Exception as e:
+            logger.error("Error with model %s: %s", model, e)
+            continue
 
-    response, raw_response = client.chat.completions.create_with_completion(
-        model="gpt-4.1",
-        response_model=CoordinatorAgentResponse,
-        messages=[{"role": "system", "content": prompt}, *conversation],
-        temperature=0.5,
-    )
+    if response is None or raw_response is None:
+        raise RuntimeError(
+            "coordinator_agent: all models failed or models list was empty; "
+            f"models_tried={models!r}"
+        )
+
 
     # Root trace id for human feedback (submit_feedback); missing when tracing is off.
     trace_id = ""
