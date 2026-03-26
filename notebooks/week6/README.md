@@ -2,11 +2,12 @@
 
 ## Purpose
 
-Week 6 extends the multi-agent shopping assistant with **LiteLLM**: one Python API surface for multiple LLM vendors (OpenAI, Groq, etc.), combined with **Instructor** for structured (Pydantic) coordinator outputs.
+Week 6 extends the multi-agent shopping assistant with **LiteLLM**: one Python API surface for multiple LLM vendors (OpenAI, Groq, etc.), combined with **Instructor** for structured (Pydantic) coordinator outputs in the first notebook, and **Google ADK** (`google.adk`) in the second for an alternate agent + tool + session pattern.
 
 ## Files in this folder
 
 - **`01-litellm-router.ipynb`** — Imports, OpenAI baseline coordinator, LiteLLM + Instructor intro (`SimpleResponse`), coordinator with **multi-model try/fallback** via `instructor.from_litellm(completion)`.
+- **`02-Warehouse-Agent-ADK.ipynb`** — **Google ADK**: `Agent` + `LiteLlm`, `Runner`, `InMemorySessionService`, and warehouse tools from `utils.tools`. Use **`instruction=`** (not `instructions`) on `Agent`; **`await`** async helpers in cells; `check_warehouse_availability` expects each item to include **`quantity`** (say “quantity 1” in the query if unspecified).
 - **`utils/`** — Local copy of Week 5-style helpers (`format_ai_message`, `get_tool_descriptions`, retrieval/cart/warehouse **tools**) so notebooks run when `cwd` is the repo root. See `utils/README.md`.
 
 ## How it fits the curriculum
@@ -19,6 +20,7 @@ Week 6 extends the multi-agent shopping assistant with **LiteLLM**: one Python A
 - Dev dependencies (including `litellm`) install with `uv sync --all-groups`.
 - API keys: either **plaintext** vars in `.env` or **`op://vault/item/field`** references read by the 1Password CLI. LiteLLM and the OpenAI SDK expect standard names such as **`OPENAI_API_KEY`** (see `env.example`).
 - **Docker:** From the repo root, `make run-docker-compose` injects secrets via `op` when the CLI is installed, so Compose can substitute `${OPENAI_API_KEY}` into containers (see root `docker-compose.yml`).
+- **Jupyter in Cursor:** If `.env` uses `op://` references, start Jupyter through Make so secrets resolve: **`make jupyter-lab`** (then Command Palette → specify the printed Jupyter server URL). Plain “Run cell” without that server often leaves `OPENAI_API_KEY` as the literal `op://…` string.
 
 ## Editor / type checking
 

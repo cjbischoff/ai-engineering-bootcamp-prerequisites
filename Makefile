@@ -9,6 +9,7 @@
 #   make health                # Check infrastructure health
 #   make smoke-test            # Test RAG pipeline end-to-end
 #   make clean-notebook-outputs # Clean Jupyter outputs
+#   make jupyter-lab           # Jupyter Lab with 1Password-resolved .env (for Cursor notebooks)
 #   make run-evals-retriever   # Run RAG evaluation
 #
 # 1Password: if the 1Password CLI (`op`) is installed and .env uses op:// references,
@@ -41,6 +42,25 @@ clean-notebook-outputs:
 	# Use nbconvert to clear outputs in-place for all notebooks
 	# notebooks/**/*.ipynb = all .ipynb files in notebooks/ and subdirectories
 	uv run jupyter nbconvert --clear-output --inplace notebooks/**/*.ipynb
+
+# Target: jupyter-lab
+# Purpose: Start Jupyter Lab with the same $(OP_RUN) wrapper as Docker — resolves op:// in .env via 1Password
+# When to use: Cursor/VS Code notebooks — run this, copy the printed http://127.0.0.1:8888/...?token=... URL,
+#   Command Palette → "Jupyter: Specify Jupyter Server URI" (or "Existing Jupyter Server"), paste, then open .ipynb
+# Requires: 1Password CLI (`op`) on PATH if .env uses op:// references; keep this terminal open while you work
+jupyter-lab:
+	@echo ""
+	@echo "Jupyter Lab (secrets via op run when op is installed). Copy the URL with token below."
+	@echo "Cursor: Cmd+Shift+P → Jupyter: Specify Jupyter Server URI → paste."
+	@echo ""
+	$(OP_RUN) uv sync
+	$(OP_RUN) uv run jupyter lab --no-browser
+
+# Target: jupyter-lab-browser
+# Purpose: Same as jupyter-lab but also opens your default browser (no --no-browser)
+jupyter-lab-browser:
+	$(OP_RUN) uv sync
+	$(OP_RUN) uv run jupyter lab
 
 # Target: health
 # Purpose: Verify infrastructure health (containers, ports, Qdrant collection)

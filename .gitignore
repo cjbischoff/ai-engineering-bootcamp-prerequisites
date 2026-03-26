@@ -22,6 +22,8 @@ env/
 # IDEs
 .vscode/
 .idea/
+# Cursor / local indexing caches
+.reflex/
 *.swp
 *.swo
 *~

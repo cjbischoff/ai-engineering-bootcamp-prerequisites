@@ -46,6 +46,7 @@ dev = [
     "psycopg[binary]>=3.3.2",
     "fastmcp>=3.0.2",
     "litellm>=1.82.6",
+    "google-adk>=1.25.0",  # Week 6: notebooks/week6/02-Warehouse-Agent-ADK.ipynb
 ]
 
 # ============================================================================
