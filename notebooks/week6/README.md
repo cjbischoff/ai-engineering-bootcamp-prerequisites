@@ -7,7 +7,7 @@ Week 6 extends the multi-agent shopping assistant with **LiteLLM**: one Python A
 ## Files in this folder
 
 - **`01-litellm-router.ipynb`** — Imports, OpenAI baseline coordinator, LiteLLM + Instructor intro (`SimpleResponse`), coordinator with **multi-model try/fallback** via `instructor.from_litellm(completion)`.
-- **`02-Warehouse-Agent-ADK.ipynb`** — **Google ADK**: `Agent` + `LiteLlm`, `Runner`, `InMemorySessionService`, and warehouse tools from `utils.tools`. Use **`instruction=`** (not `instructions`) on `Agent`; **`await`** async helpers in cells; `check_warehouse_availability` expects each item to include **`quantity`** (say “quantity 1” in the query if unspecified).
+- **`02-Warehouse-Agent-ADK.ipynb`** — **Google ADK**: `Agent` + `LiteLlm`, `Runner`, `InMemorySessionService`, and warehouse tools from `utils.tools`. Use **`instruction=`** (not `instructions`) on `Agent`; **`await`** async helpers in cells; `check_warehouse_availability` expects each item to include **`quantity`** (say “quantity 1” in the query if unspecified). For **`adk web`** + Dev UI, see **`apps/adk_warehouse_manager_agent/README.md`** (run from `apps/adk_warehouse_manager_agent`, **`op run`** if `.env` uses `op://`).
 - **`utils/`** — Local copy of Week 5-style helpers (`format_ai_message`, `get_tool_descriptions`, retrieval/cart/warehouse **tools**) so notebooks run when `cwd` is the repo root. See `utils/README.md`.
 
 ## How it fits the curriculum

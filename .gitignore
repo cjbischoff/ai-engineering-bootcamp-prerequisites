@@ -22,6 +22,8 @@ env/
 # IDEs
 .vscode/
 .idea/
+.cursor/
+.windsurf/
 # Cursor / local indexing caches
 .reflex/
 *.swp
@@ -59,8 +61,17 @@ postgres_data/
 .claude/*
 !.claude/settings.json
 
+# Project-specific documentation (working notes, not for repo)
+.docs/
+
 # MCP server configuration (1Password secrets, safe to commit)
 # .mcp.json is tracked (uses op:// references, no plaintext secrets)
 
 # Serena LSP server cache (IDE tooling)
 .serena/
+
+# Google ADK local session DB and artifacts (runtime; do not commit)
+**/.adk/
+
+# Editor / tool backup files next to tracked docs
+*.md.backup
