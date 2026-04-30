@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "api",
+    "a2a-sdk>=0.3.25",
     "google-genai>=1.57.0",
     "groq>=1.0.0",
     "ipykernel>=7.1.0",

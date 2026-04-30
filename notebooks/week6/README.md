@@ -2,18 +2,19 @@
 
 ## Purpose
 
-Week 6 extends the multi-agent shopping assistant with **LiteLLM**: one Python API surface for multiple LLM vendors (OpenAI, Groq, etc.), combined with **Instructor** for structured (Pydantic) coordinator outputs in the first notebook, and **Google ADK** (`google.adk`) in the second for an alternate agent + tool + session pattern.
+Week 6 extends the multi-agent shopping assistant with **LiteLLM**: one Python API surface for multiple LLM vendors (OpenAI, Groq, etc.), combined with **Instructor** for structured (Pydantic) coordinator outputs in the first notebook, **Google ADK** (`google.adk`) in the second for an alternate agent + tool + session pattern, and **A2A** (`a2a-sdk`) in the third for a remote agent server + client.
 
 ## Files in this folder
 
 - **`01-litellm-router.ipynb`** — Imports, OpenAI baseline coordinator, LiteLLM + Instructor intro (`SimpleResponse`), coordinator with **multi-model try/fallback** via `instructor.from_litellm(completion)`.
 - **`02-Warehouse-Agent-ADK.ipynb`** — **Google ADK**: `Agent` + `LiteLlm`, `Runner`, `InMemorySessionService`, and warehouse tools from `utils.tools`. Use **`instruction=`** (not `instructions`) on `Agent`; **`await`** async helpers in cells; `check_warehouse_availability` expects each item to include **`quantity`** (say “quantity 1” in the query if unspecified). For **`adk web`** + Dev UI, see **`apps/adk_warehouse_manager_agent/README.md`** (run from `apps/adk_warehouse_manager_agent`, **`op run`** if `.env` uses `op://`).
+- **`03-Warehouse-Agent-A2A.ipynb`** — **A2A client** with `a2a-sdk`: `A2ACardResolver`, `ClientFactory.connect`, `Message` + streaming `send_message`. Run the remote server first (**`make run-a2a-warehouse-agent`** from repo root) and align **`BASE_URL`** / agent-card path with `apps/a2a_warehouse_manager_agent/appy.py` logs. If the stream dies mid-response, check server logs (often **unresolved `op://` API keys** or LLM errors during SSE).
 - **`utils/`** — Local copy of Week 5-style helpers (`format_ai_message`, `get_tool_descriptions`, retrieval/cart/warehouse **tools**) so notebooks run when `cwd` is the repo root. See `utils/README.md`.
 
 ## How it fits the curriculum
 
 - **Week 5:** Coordinator + `instructor.from_openai(OpenAI())`.
-- **Week 6:** Swap the completion backend to **`litellm.completion`** via **`instructor.from_litellm`**, use **`provider/model`** strings, and optionally loop models for resilience.
+- **Week 6:** Swap the completion backend to **`litellm.completion`** via **`instructor.from_litellm`**, use **`provider/model`** strings, optionally loop models for resilience, add **ADK** for sessioned agents, then **A2A** for standardized remote agent access.
 
 ## Environment
 

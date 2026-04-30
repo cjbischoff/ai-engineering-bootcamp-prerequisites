@@ -10,6 +10,7 @@
 #   make smoke-test            # Test RAG pipeline end-to-end
 #   make clean-notebook-outputs # Clean Jupyter outputs
 #   make jupyter-lab           # Jupyter Lab with 1Password-resolved .env (for Cursor notebooks)
+#   make run-a2a-warehouse-agent  # Week 6 A2A warehouse server (needs op:// resolved OPENAI_API_KEY)
 #   make run-evals-retriever   # Run RAG evaluation
 #
 # 1Password: if the 1Password CLI (`op`) is installed and .env uses op:// references,
@@ -61,6 +62,14 @@ jupyter-lab:
 jupyter-lab-browser:
 	$(OP_RUN) uv sync
 	$(OP_RUN) uv run jupyter lab
+
+# Target: run-a2a-warehouse-agent
+# Purpose: Start apps/a2a_warehouse_manager_agent (UVicorn) with secrets resolved from .env
+# When to use: Week 6 notebook 03-Warehouse-Agent-A2A — same pattern as jupyter-lab / run-docker-compose
+# Requires: 1Password CLI (`op`) on PATH when .env uses op:// references; otherwise OPENAI_API_KEY must be plain text in env
+run-a2a-warehouse-agent:
+	$(OP_RUN) uv sync
+	cd apps/a2a_warehouse_manager_agent && $(OP_RUN) uv run appy.py
 
 # Target: health
 # Purpose: Verify infrastructure health (containers, ports, Qdrant collection)
