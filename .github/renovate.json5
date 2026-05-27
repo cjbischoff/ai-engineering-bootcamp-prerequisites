@@ -1,0 +1,88 @@
+{
+  // Docs: https://docs.renovatebot.com/configuration-options/
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  // ---------------------------------------------------------------------------
+  // GENERAL CONFIG
+  // ---------------------------------------------------------------------------
+  baseBranchPatterns: ["main"],
+  schedule: ["at any time"], // Workflow controls when it runs
+  timezone: "UTC",
+
+  // PR settings
+  prConcurrentLimit: 10,   // Max open Renovate PRs at once (0 = no limit)
+  prHourlyLimit: 0,        // No per-hour cap (default is 2)
+  prCreation: "immediate", // Open PR as soon as branch is ready
+  automerge: false,
+  labels: ["dependencies"],
+  separateMajorMinor: false, // Group major+minor into one PR
+
+  // Supply chain protection — ignore packages published < 14 days ago
+  minimumReleaseAge: "14 days",
+  internalChecksFilter: "strict",
+
+  // ---------------------------------------------------------------------------
+  // INCLUDES — only scan these paths
+  // ---------------------------------------------------------------------------
+  includePaths: [
+    ".github/**",
+    "pyproject.toml",
+    "apps/api/**",
+    "apps/chatbot_ui/**",
+    "apps/items_mcp_server/**",
+    "apps/reviews_mcp_server/**",
+  ],
+
+  // ---------------------------------------------------------------------------
+  // PACKAGE RULES
+  // ---------------------------------------------------------------------------
+  packageRules: [
+    // GitHub Actions
+    {
+      matchManagers: ["github-actions"],
+      groupName: "github-actions",
+      commitMessagePrefix: "[RENOVATE] [CI] [DEPS]:",
+      commitMessageTopic: "GitHub Actions",
+    },
+    // Python — root workspace pyproject.toml
+    {
+      matchFileNames: ["pyproject.toml"],
+      matchManagers: ["pep621"],
+      groupName: "python-workspace",
+      commitMessagePrefix: "[RENOVATE] [AI-PREREQS] [DEPS]:",
+      commitMessageTopic: "Python workspace",
+    },
+    // Python — apps/api
+    {
+      matchFileNames: ["apps/api/pyproject.toml"],
+      matchManagers: ["pep621"],
+      groupName: "python-api",
+      commitMessagePrefix: "[RENOVATE] [AI-PREREQS] [DEPS]:",
+      commitMessageTopic: "Python api",
+    },
+    // Python — apps/chatbot_ui
+    {
+      matchFileNames: ["apps/chatbot_ui/pyproject.toml"],
+      matchManagers: ["pep621"],
+      groupName: "python-chatbot-ui",
+      commitMessagePrefix: "[RENOVATE] [AI-PREREQS] [DEPS]:",
+      commitMessageTopic: "Python chatbot_ui",
+    },
+    // Python — apps/items_mcp_server
+    {
+      matchFileNames: ["apps/items_mcp_server/pyproject.toml"],
+      matchManagers: ["pep621"],
+      groupName: "python-items-mcp-server",
+      commitMessagePrefix: "[RENOVATE] [AI-PREREQS] [DEPS]:",
+      commitMessageTopic: "Python items_mcp_server",
+    },
+    // Python — apps/reviews_mcp_server
+    {
+      matchFileNames: ["apps/reviews_mcp_server/pyproject.toml"],
+      matchManagers: ["pep621"],
+      groupName: "python-reviews-mcp-server",
+      commitMessagePrefix: "[RENOVATE] [AI-PREREQS] [DEPS]:",
+      commitMessageTopic: "Python reviews_mcp_server",
+    },
+  ],
+}

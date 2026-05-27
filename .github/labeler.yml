@@ -1,0 +1,27 @@
+# Used by the renovate-review Claude skill to detect which sub-project
+# a PR touches. Each component-* label maps to one app root.
+# Non-component labels (ci-cd) are ignored by the skill's project detection.
+
+component-workspace:
+  - changed-files:
+      - any-glob-to-any-file: "pyproject.toml"
+
+component-api:
+  - changed-files:
+      - any-glob-to-any-file: "apps/api/**"
+
+component-chatbot-ui:
+  - changed-files:
+      - any-glob-to-any-file: "apps/chatbot_ui/**"
+
+component-items-mcp-server:
+  - changed-files:
+      - any-glob-to-any-file: "apps/items_mcp_server/**"
+
+component-reviews-mcp-server:
+  - changed-files:
+      - any-glob-to-any-file: "apps/reviews_mcp_server/**"
+
+ci-cd:
+  - changed-files:
+      - any-glob-to-any-file: ".github/**"
